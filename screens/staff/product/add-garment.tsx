@@ -24,6 +24,7 @@ import {
 } from '../../navigator';
 
 import { supabase } from '../../../supabase';
+import { Ionicons } from '@expo/vector-icons';
 
 type Props = NativeStackScreenProps<
   RootStackParamList,
@@ -222,9 +223,11 @@ export default function AddGarmentScreen({
             />
           ) : (
             <>
-              <Text style={styles.imageIcon}>
-                📷
-              </Text>
+              <Ionicons
+                name="image-outline"
+                size={45}
+                color="#d96b8a"
+              />
 
               <Text style={styles.imageText}>
                 Select Image
@@ -357,11 +360,6 @@ const styles = StyleSheet.create({
   previewImage: {
     width: '100%',
     height: '100%',
-  },
-
-  imageIcon: {
-    fontSize: 40,
-    marginBottom: 8,
   },
 
   imageText: {

@@ -7,6 +7,8 @@ import {
   Alert,
 } from 'react-native';
 
+import { Ionicons } from '@expo/vector-icons';
+
 import {
   CompositeScreenProps,
 } from '@react-navigation/native';
@@ -24,7 +26,10 @@ import {
   RootStackParamList,
 } from '../../navigator';
 
-import { useEffect, useState } from 'react';
+import {
+  useEffect,
+  useState,
+} from 'react';
 
 import { supabase } from '../../../supabase';
 
@@ -105,9 +110,11 @@ export default function ProfileScreen({ navigation }: Props) {
 
         <View style={styles.profileCard}>
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
-              👤
-            </Text>
+            <Ionicons
+              name="person"
+              size={35}
+              color="#fff"
+            />
           </View>
 
           <View style={styles.profileInfo}>
@@ -133,7 +140,11 @@ export default function ProfileScreen({ navigation }: Props) {
           style={styles.menuItem}
         >
           <View style={styles.menuIcon}>
-            <Text>👤</Text>
+            <Ionicons
+              name="person-outline"
+              size={22}
+              color="#d96b8a"
+            />
           </View>
 
           <View style={styles.menuContent}>
@@ -146,9 +157,11 @@ export default function ProfileScreen({ navigation }: Props) {
             </Text>
           </View>
 
-          <Text style={styles.arrow}>
-            ›
-          </Text>
+          <Ionicons
+            name="chevron-forward"
+            size={20}
+            color="#bbb"
+          />
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -158,7 +171,11 @@ export default function ProfileScreen({ navigation }: Props) {
           }
         >
           <View style={styles.menuIcon}>
-            <Text>📏</Text>
+            <Ionicons
+              name="resize-outline"
+              size={22}
+              color="#d96b8a"
+            />
           </View>
 
           <View style={styles.menuContent}>
@@ -171,9 +188,11 @@ export default function ProfileScreen({ navigation }: Props) {
             </Text>
           </View>
 
-          <Text style={styles.arrow}>
-            ›
-          </Text>
+          <Ionicons
+            name="chevron-forward"
+            size={20}
+            color="#bbb"
+          />
         </TouchableOpacity>
 
         <Text style={styles.sectionTitle}>
@@ -184,7 +203,11 @@ export default function ProfileScreen({ navigation }: Props) {
           style={styles.menuItem}
         >
           <View style={styles.menuIcon}>
-            <Text>🔔</Text>
+            <Ionicons
+              name="notifications-outline"
+              size={22}
+              color="#d96b8a"
+            />
           </View>
 
           <View style={styles.menuContent}>
@@ -197,16 +220,22 @@ export default function ProfileScreen({ navigation }: Props) {
             </Text>
           </View>
 
-          <Text style={styles.arrow}>
-            ›
-          </Text>
+          <Ionicons
+            name="chevron-forward"
+            size={20}
+            color="#bbb"
+          />
         </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.menuItem}
         >
           <View style={styles.menuIcon}>
-            <Text>🔒</Text>
+            <Ionicons
+              name="lock-closed-outline"
+              size={22}
+              color="#d96b8a"
+            />
           </View>
 
           <View style={styles.menuContent}>
@@ -219,15 +248,24 @@ export default function ProfileScreen({ navigation }: Props) {
             </Text>
           </View>
 
-          <Text style={styles.arrow}>
-            ›
-          </Text>
+          <Ionicons
+            name="chevron-forward"
+            size={20}
+            color="#bbb"
+          />
         </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.logoutButton}
           onPress={handleLogout}
         >
+          <Ionicons
+            name="log-out-outline"
+            size={20}
+            color="#d96b8a"
+            style={styles.logoutIcon}
+          />
+
           <Text style={styles.logoutText}>
             Log Out
           </Text>
@@ -277,10 +315,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 15,
-  },
-
-  avatarText: {
-    fontSize: 32,
   },
 
   profileInfo: {
@@ -351,20 +385,20 @@ const styles = StyleSheet.create({
     lineHeight: 17,
   },
 
-  arrow: {
-    fontSize: 28,
-    color: '#bbb',
-    marginLeft: 8,
-  },
-
   logoutButton: {
     backgroundColor: '#fff',
     borderWidth: 1,
     borderColor: '#d96b8a',
     borderRadius: 12,
     padding: 15,
+    flexDirection: 'row',
+    justifyContent: 'center',
     alignItems: 'center',
     marginTop: 15,
+  },
+
+  logoutIcon: {
+    marginRight: 8,
   },
 
   logoutText: {

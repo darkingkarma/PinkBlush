@@ -5,7 +5,7 @@ import {
   Text,
   View,
 } from 'react-native';
-
+import { Ionicons } from '@expo/vector-icons';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -17,6 +17,9 @@ import HomeScreen from './customer/home';
 import ProfileScreen from './customer/customer-profile/profile';
 import MeasurementsScreen from './customer/customer-profile/measurements';
 import EditMeasurementsScreen from './customer/customer-profile/edit-measurements';
+import OrderMeasurementsScreen from './customer/order/order-measurements';
+import ReviewOrderScreen from './customer/order/review-order';
+
 import StaffDashboard from './staff/dashboard';
 
 import GarmentCategoriesScreen from './staff/product/garment-categories';
@@ -28,11 +31,9 @@ import GarmentsScreen from './staff/product/garment';
 import AddGarmentScreen from './staff/product/add-garment';
 import EditGarmentScreen from './staff/product/edit-garment';
 
-import GarmentPartsScreen from './staff/product/garment-parts';
 import AddGarmentPartScreen from './staff/product/add-garment-part';
 import EditGarmentPartScreen from './staff/product/edit-garment-part';
 
-import DesignsScreen from './staff/product/designs';
 import AddDesignScreen from './staff/product/add-design';
 import EditDesignScreen from './staff/product/edit-design';
 
@@ -40,9 +41,13 @@ import FabricsScreen from './staff/product/fabrics';
 import AddFabricScreen from './staff/product/add-fabric';
 import EditFabricScreen from './staff/product/edit-fabric';
 
-import ManageGarmentFabricsScreen from './staff/product/manage-garment-fabrics';
-
 import GarmentDetailsScreen from './staff/product/garment-details';
+import CustomerGarmentDetailsScreen from './customer/order/garment-details';
+
+import CustomerGarmentsScreen from './customer/order/garments';
+import ConfigurePartsScreen from './customer/order/configure-parts';
+import SelectDesignScreen from './customer/order/select-design';
+import SelectFabricScreen from './customer/order/select-fabric';
 
 import { supabase } from '../supabase';
 
@@ -55,7 +60,9 @@ export type RootStackParamList = {
   ManageGarments: undefined;
 
   GarmentCategories: undefined;
+
   AddGarmentCategory: undefined;
+
   EditGarmentCategory: {
     category: {
       id: string;
@@ -63,19 +70,46 @@ export type RootStackParamList = {
       description: string | null;
     };
   };
-  
+
   Garments: undefined;
+
   Measurements: undefined;
+
   EditMeasurements: undefined;
+
   AddGarment: undefined;
-  EditGarment: { garment: { id: string; name: string; description: string | null; available: boolean; category_id: string;image_url: string | null; }; };
 
-  GarmentParts: undefined;
-  AddGarmentPart: undefined;
-  EditGarmentPart: { part: { id: string; garment_id: string; name: string; description: string | null; price: number; gender: string; available: boolean; }; };
+  EditGarment: {
+    garment: {
+      id: string;
+      name: string;
+      description: string | null;
+      available: boolean;
+      category_id: string;
+      image_url: string | null;
+    };
+  };
 
-  Designs: undefined;
-  AddDesign: undefined;
+  AddGarmentPart: {
+    garmentId: string;
+  };
+
+  EditGarmentPart: {
+    part: {
+      id: string;
+      garment_id: string;
+      name: string;
+      description: string | null;
+      price: number;
+      gender: string;
+      available: boolean;
+    };
+  };
+
+  AddDesign: {
+    garmentPartId: string;
+  };
+
   EditDesign: {
     design: {
       id: string;
@@ -85,11 +119,21 @@ export type RootStackParamList = {
       image_url: string | null;
     };
   };
-  Fabrics: undefined; 
-  AddFabric: undefined; 
-  EditFabric: { fabric: { id: string; name: string; description: string | null; image_url: string | null; price_addition: number; available: boolean; }; };
 
-  ManageGarmentFabrics: undefined;
+  Fabrics: undefined;
+
+  AddFabric: undefined;
+
+  EditFabric: {
+    fabric: {
+      id: string;
+      name: string;
+      description: string | null;
+      image_url: string | null;
+      price_addition: number;
+      available: boolean;
+    };
+  };
 
   GarmentDetails: {
     garment: {
@@ -102,8 +146,166 @@ export type RootStackParamList = {
     };
   };
 
+  CustomerGarments: undefined;
+
+  CustomerGarmentDetails: {
+    garment: {
+      id: string;
+      name: string;
+      description: string | null;
+      available: boolean;
+      category_id: string;
+      image_url: string | null;
+    };
+  };
+
+  ConfigureParts: {
+    garment: {
+      id: string;
+      name: string;
+      description: string | null;
+      available: boolean;
+      category_id: string;
+      image_url: string | null;
+    };
+
+    selectedPartIds: string[];
+
+    selectedDesign?: {
+      partId: string;
+      design: {
+        id: string;
+        garment_part_id: string;
+        name: string;
+        description: string | null;
+        image_url: string | null;
+      };
+    };
+
+    selectedFabric?: {
+      partId: string;
+      fabric: {
+        id: string;
+        name: string;
+        description: string | null;
+        image_url: string | null;
+        price_addition: number;
+        available: boolean;
+      };
+    };
+  };
+
+  SelectDesign: {
+    garmentPart: {
+      id: string;
+      name: string;
+      description: string | null;
+      price: number;
+      gender: string;
+      available: boolean;
+    };
+
+    garment: {
+      id: string;
+      name: string;
+      description: string | null;
+      available: boolean;
+      category_id: string;
+      image_url: string | null;
+    };
+
+    selectedPartIds: string[];
+  };
+
+  SelectFabric: {
+    garmentPart: {
+      id: string;
+      name: string;
+      description: string | null;
+      price: number;
+      gender: string;
+      available: boolean;
+    };
+
+    garment: {
+      id: string;
+      name: string;
+      description: string | null;
+      available: boolean;
+      category_id: string;
+      image_url: string | null;
+    };
+
+    selectedPartIds: string[];
+  };
+
+  OrderMeasurements: {
+    orderData: {
+      garment: {
+        id: string;
+        name: string;
+        description: string | null;
+        available: boolean;
+        category_id: string;
+        image_url: string | null;
+      };
+
+      items: {
+        partId: string;
+        partName: string;
+        designId: string | null;
+        designName: string | null;
+        fabricId: string | null;
+        fabricName: string | null;
+        quantity: number;
+        unitPrice: number;
+        subtotal: number;
+      }[];
+
+      totalAmount: number;
+    };
+  };
+
+  ReviewOrder: {
+    orderData: {
+      garment: {
+        id: string;
+        name: string;
+        description: string | null;
+        available: boolean;
+        category_id: string;
+        image_url: string | null;
+      };
+
+      items: {
+        partId: string;
+        partName: string;
+        designId: string | null;
+        designName: string | null;
+        fabricId: string | null;
+        fabricName: string | null;
+        quantity: number;
+        unitPrice: number;
+        subtotal: number;
+      }[];
+
+      totalAmount: number;
+    };
+
+    measurement: {
+      id: string;
+      shoulder: number | null;
+      chest: number | null;
+      waist: number | null;
+      sleeve_length: number | null;
+      top_length: number | null;
+      hips: number | null;
+      inseam: number | null;
+      bottom_length: number | null;
+    };
+  };
 };
- 
+
 export type MainTabParamList = {
   Home: undefined;
   Profile: undefined;
@@ -112,16 +314,38 @@ export type MainTabParamList = {
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
+
 function MainTabs() {
   return (
-    <Tab.Navigator>
+    <Tab.Navigator
+      screenOptions={{
+        headerShown: false,
+        tabBarActiveTintColor: '#d96b8a',
+        tabBarInactiveTintColor: '#999',
+        tabBarStyle: {
+          backgroundColor: '#fff',
+          borderTopColor: '#f1d9e0',
+          height: 65,
+          paddingBottom: 8,
+          paddingTop: 6,
+        },
+        tabBarLabelStyle: {
+          fontSize: 12,
+          fontWeight: '600',
+        },
+      }}
+    >
       <Tab.Screen
         name="Home"
         component={HomeScreen}
         options={{
           tabBarLabel: 'Home',
-          tabBarIcon: ({ color }) => (
-            <Text style={{ fontSize: 22, color }}>⌂</Text>
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons
+              name={focused ? 'home' : 'home-outline'}
+              size={size}
+              color={color}
+            />
           ),
         }}
       />
@@ -131,8 +355,12 @@ function MainTabs() {
         component={ProfileScreen}
         options={{
           tabBarLabel: 'Profile',
-          tabBarIcon: ({ color }) => (
-            <Text style={{ fontSize: 20, color }}>👤</Text>
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons
+              name={focused ? 'person-circle' : 'person-circle-outline'}
+              size={size}
+              color={color}
+            />
           ),
         }}
       />
@@ -254,6 +482,41 @@ export default function AppNavigator() {
               name="EditMeasurements"
               component={EditMeasurementsScreen}
             />
+
+            <Stack.Screen
+              name="OrderMeasurements"
+              component={OrderMeasurementsScreen}
+            />
+
+            <Stack.Screen
+              name="ReviewOrder"
+              component={ReviewOrderScreen}
+            />
+
+            <Stack.Screen
+              name="CustomerGarments"
+              component={CustomerGarmentsScreen}
+            />
+
+            <Stack.Screen
+              name="CustomerGarmentDetails"
+              component={CustomerGarmentDetailsScreen}
+            />
+
+            <Stack.Screen
+              name="ConfigureParts"
+              component={ConfigurePartsScreen}
+            />
+
+            <Stack.Screen
+              name="SelectDesign"
+              component={SelectDesignScreen}
+            />
+
+            <Stack.Screen
+              name="SelectFabric"
+              component={SelectFabricScreen}
+            />
           </>
         )}
 
@@ -268,6 +531,7 @@ export default function AppNavigator() {
               name="ManageGarments"
               component={ManageGarmentsScreen}
             />
+
             <Stack.Screen
               name="GarmentCategories"
               component={GarmentCategoriesScreen}
@@ -277,6 +541,7 @@ export default function AppNavigator() {
               name="AddGarmentCategory"
               component={AddGarmentCategoryScreen}
             />
+
             <Stack.Screen
               name="EditGarmentCategory"
               component={EditGarmentCategoryScreen}
@@ -286,26 +551,25 @@ export default function AppNavigator() {
               name="Garments"
               component={GarmentsScreen}
             />
+
             <Stack.Screen
               name="AddGarment"
               component={AddGarmentScreen}
             />
-            <Stack.Screen name="EditGarment" component={EditGarmentScreen} />
 
             <Stack.Screen
-              name="GarmentParts"
-              component={GarmentPartsScreen}
+              name="EditGarment"
+              component={EditGarmentScreen}
             />
 
             <Stack.Screen
               name="AddGarmentPart"
               component={AddGarmentPartScreen}
             />
-            <Stack.Screen name="EditGarmentPart" component={EditGarmentPartScreen} />
 
             <Stack.Screen
-              name="Designs"
-              component={DesignsScreen}
+              name="EditGarmentPart"
+              component={EditGarmentPartScreen}
             />
 
             <Stack.Screen
@@ -317,9 +581,16 @@ export default function AppNavigator() {
               name="EditDesign"
               component={EditDesignScreen}
             />
-            
-            <Stack.Screen name="Fabrics" component={FabricsScreen} /> 
-            <Stack.Screen name="AddFabric" component={AddFabricScreen} />
+
+            <Stack.Screen
+              name="Fabrics"
+              component={FabricsScreen}
+            />
+
+            <Stack.Screen
+              name="AddFabric"
+              component={AddFabricScreen}
+            />
 
             <Stack.Screen
               name="EditFabric"
@@ -327,19 +598,13 @@ export default function AppNavigator() {
             />
 
             <Stack.Screen
-              name="ManageGarmentFabrics"
-              component={ManageGarmentFabricsScreen}
-            />
-
-            <Stack.Screen
               name="GarmentDetails"
               component={GarmentDetailsScreen}
             />
-
           </>
-          
         )}
       </Stack.Navigator>
     </NavigationContainer>
   );
 }
+

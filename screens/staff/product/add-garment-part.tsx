@@ -1,5 +1,4 @@
 import {
-  useEffect,
   useState,
 } from 'react';
 
@@ -10,7 +9,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View,
+  View, 
 } from 'react-native';
 
 import {
@@ -30,19 +29,13 @@ type Props = NativeStackScreenProps<
   'AddGarmentPart'
 >;
 
-type Garment = {
-  id: string;
-  name: string;
-};
-
 export default function AddGarmentPartScreen({
+  route,
   navigation,
 }: Props) {
-  const [garments, setGarments] =
-    useState<Garment[]>([]);
-
-  const [garmentId, setGarmentId] =
-    useState('');
+  const {
+    garmentId,
+  } = route.params;
 
   const [name, setName] =
     useState('');
@@ -59,40 +52,7 @@ export default function AddGarmentPartScreen({
   const [available, setAvailable] =
     useState(true);
 
-  const getGarments = async () => {
-    const {
-      data,
-      error,
-    } = await supabase
-      .from('garments')
-      .select('id, name')
-      .eq('available', true)
-      .order('name');
-
-    if (error) {
-      Alert.alert(
-        'Error',
-        error.message
-      );
-      return;
-    }
-
-    setGarments(data || []);
-  };
-
-  useEffect(() => {
-    getGarments();
-  }, []);
-
   const addPart = async () => {
-    if (!garmentId) {
-      Alert.alert(
-        'Error',
-        'Please select a garment.'
-      );
-      return;
-    }
-
     if (!name.trim()) {
       Alert.alert(
         'Error',
@@ -169,43 +129,6 @@ export default function AddGarmentPartScreen({
       <Text style={styles.title}>
         Add Garment Part
       </Text>
-
-      <Text style={styles.label}>
-        Garment
-      </Text>
-
-      {garments.map((garment) => (
-        <TouchableOpacity
-          key={garment.id}
-          style={[
-            styles.option,
-            garmentId === garment.id &&
-              styles.selectedOption,
-          ]}
-          onPress={() =>
-            setGarmentId(
-              garment.id
-            )
-          }
-        >
-          <Text
-            style={[
-              styles.optionText,
-              garmentId ===
-                garment.id &&
-                styles.selectedOptionText,
-            ]}
-          >
-            {garment.name}
-          </Text>
-        </TouchableOpacity>
-      ))}
-
-      {garments.length === 0 && (
-        <Text style={styles.emptyText}>
-          No garments available.
-        </Text>
-      )}
 
       <Text style={styles.label}>
         Part Name
@@ -363,34 +286,6 @@ const styles = StyleSheet.create({
     color: '#444',
     marginBottom: 8,
     marginTop: 10,
-  },
-
-  option: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 8,
-  },
-
-  selectedOption: {
-    backgroundColor: '#fce8ee',
-    borderColor: '#d96b8a',
-  },
-
-  optionText: {
-    fontSize: 15,
-    color: '#444',
-  },
-
-  selectedOptionText: {
-    color: '#d96b8a',
-    fontWeight: '600',
-  },
-
-  emptyText: {
-    color: '#888',
-    marginBottom: 10,
   },
 
   input: {

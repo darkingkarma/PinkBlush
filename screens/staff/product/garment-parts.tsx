@@ -1,3 +1,5 @@
+//no more use of this
+
 import {
   useCallback,
   useState,
@@ -29,8 +31,7 @@ import {
 } from '../../../supabase';
 
 type Props = NativeStackScreenProps<
-  RootStackParamList,
-  'GarmentParts'
+  RootStackParamList
 >;
 
 type GarmentPart = {
@@ -160,11 +161,7 @@ export default function GarmentPartsScreen({
 
         <TouchableOpacity
           style={styles.addButton}
-          onPress={() =>
-            navigation.navigate(
-              'AddGarmentPart'
-            )
-          }
+
         >
           <Text style={styles.addButtonText}>
             + Add

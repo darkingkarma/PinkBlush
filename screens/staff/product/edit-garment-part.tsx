@@ -1,5 +1,4 @@
 import {
-  useEffect,
   useState,
 } from 'react';
 
@@ -30,22 +29,11 @@ type Props = NativeStackScreenProps<
   'EditGarmentPart'
 >;
 
-type Garment = {
-  id: string;
-  name: string;
-};
-
 export default function EditGarmentPartScreen({
   navigation,
   route,
 }: Props) {
   const { part } = route.params;
-
-  const [garments, setGarments] =
-    useState<Garment[]>([]);
-
-  const [garmentId, setGarmentId] =
-    useState(part.garment_id);
 
   const [name, setName] =
     useState(part.name);
@@ -62,40 +50,7 @@ export default function EditGarmentPartScreen({
   const [available, setAvailable] =
     useState(part.available);
 
-  const getGarments = async () => {
-    const {
-      data,
-      error,
-    } = await supabase
-      .from('garments')
-      .select('id, name')
-      .eq('available', true)
-      .order('name');
-
-    if (error) {
-      Alert.alert(
-        'Error',
-        error.message
-      );
-      return;
-    }
-
-    setGarments(data || []);
-  };
-
-  useEffect(() => {
-    getGarments();
-  }, []);
-
   const updatePart = async () => {
-    if (!garmentId) {
-      Alert.alert(
-        'Error',
-        'Please select a garment.'
-      );
-      return;
-    }
-
     if (!name.trim()) {
       Alert.alert(
         'Error',
@@ -129,7 +84,7 @@ export default function EditGarmentPartScreen({
       } = await supabase
         .from('garment_parts')
         .update({
-          garment_id: garmentId,
+          garment_id: part.garment_id,
           name: name.trim(),
           gender: gender,
           price: priceNumber,
@@ -174,34 +129,6 @@ export default function EditGarmentPartScreen({
       <Text style={styles.title}>
         Edit Garment Part
       </Text>
-
-      <Text style={styles.label}>
-        Garment
-      </Text>
-
-      {garments.map((garment) => (
-        <TouchableOpacity
-          key={garment.id}
-          style={[
-            styles.option,
-            garmentId === garment.id &&
-              styles.selectedOption,
-          ]}
-          onPress={() =>
-            setGarmentId(garment.id)
-          }
-        >
-          <Text
-            style={[
-              styles.optionText,
-              garmentId === garment.id &&
-                styles.selectedOptionText,
-            ]}
-          >
-            {garment.name}
-          </Text>
-        </TouchableOpacity>
-      ))}
 
       <Text style={styles.label}>
         Part Name
@@ -367,29 +294,6 @@ const styles = StyleSheet.create({
     color: '#444',
     marginTop: 15,
     marginBottom: 8,
-  },
-
-  option: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    padding: 13,
-    borderRadius: 8,
-    marginBottom: 8,
-  },
-
-  selectedOption: {
-    backgroundColor: '#d96b8a',
-    borderColor: '#d96b8a',
-  },
-
-  optionText: {
-    color: '#444',
-    fontSize: 15,
-  },
-
-  selectedOptionText: {
-    color: '#fff',
-    fontWeight: '600',
   },
 
   input: {

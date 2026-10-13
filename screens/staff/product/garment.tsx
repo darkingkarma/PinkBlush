@@ -13,6 +13,8 @@ import {
   View,
 } from 'react-native';
 
+import { Ionicons } from '@expo/vector-icons';
+
 import {
   useFocusEffect,
 } from '@react-navigation/native';
@@ -177,9 +179,11 @@ export default function GarmentsScreen({
               />
             ) : (
               <View style={styles.imagePlaceholder}>
-                <Text style={styles.placeholderText}>
-                  👗
-                </Text>
+                <Ionicons
+                  name="image-outline"
+                  size={32}
+                  color="#d96b8a"
+                />
               </View>
             )}
 
@@ -337,13 +341,9 @@ const styles = StyleSheet.create({
     width: 85,
     height: 85,
     borderRadius: 12,
-    backgroundColor: '#fafafa',
+    backgroundColor: '#fdf2f5',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-
-  placeholderText: {
-    fontSize: 30,
   },
 
   info: {
@@ -380,6 +380,8 @@ const styles = StyleSheet.create({
   actions: {
     flexDirection: 'row',
     marginTop: 8,
+    flexWrap: 'wrap',
+    rowGap: 6,
   },
 
   manageButton: {

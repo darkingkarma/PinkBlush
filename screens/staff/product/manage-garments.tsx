@@ -42,10 +42,6 @@ export default function ManageGarmentsScreen({
             navigation.navigate('GarmentCategories')
           }
         >
-          <View style={styles.icon}>
-            <Text>👕</Text>
-          </View>
-
           <View style={styles.textContainer}>
             <Text style={styles.menuTitle}>
               Garment Categories
@@ -65,63 +61,13 @@ export default function ManageGarmentsScreen({
             navigation.navigate('Garments')
           }
         >
-          <View style={styles.icon}>
-            <Text>👗</Text>
-          </View>
-
           <View style={styles.textContainer}>
             <Text style={styles.menuTitle}>
               Garments
             </Text>
 
             <Text style={styles.menuText}>
-              Manage the actual garments offered by the shop.
-            </Text>
-          </View>
-
-          <Text style={styles.arrow}>›</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.menuItem}
-          onPress={() =>
-            navigation.navigate('GarmentParts')
-          }
-        >
-          <View style={styles.icon}>
-            <Text>✂️</Text>
-          </View>
-
-          <View style={styles.textContainer}>
-            <Text style={styles.menuTitle}>
-              Garment Parts
-            </Text>
-
-            <Text style={styles.menuText}>
-              Manage parts such as Upper and Lower with their prices.
-            </Text>
-          </View>
-
-          <Text style={styles.arrow}>›</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.menuItem}
-          onPress={() =>
-            navigation.navigate('Designs')
-          }
-        >
-          <View style={styles.icon}>
-            <Text>🎨</Text>
-          </View>
-
-          <View style={styles.textContainer}>
-            <Text style={styles.menuTitle}>
-              Designs
-            </Text>
-
-            <Text style={styles.menuText}>
-              Manage garment designs and images.
+              Manage garments, parts, designs, and fabrics.
             </Text>
           </View>
 
@@ -134,10 +80,6 @@ export default function ManageGarmentsScreen({
             navigation.navigate('Fabrics')
           }
         >
-          <View style={styles.icon}>
-            <Text>🧵</Text>
-          </View>
-
           <View style={styles.textContainer}>
             <Text style={styles.menuTitle}>
               Fabrics
@@ -149,19 +91,6 @@ export default function ManageGarmentsScreen({
           </View>
 
           <Text style={styles.arrow}>›</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.menuItem}
-          onPress={() =>
-            navigation.navigate(
-              'ManageGarmentFabrics'
-            )
-          }
-        >
-          <Text style={styles.menuText}>
-            Manage Garment Fabrics
-          </Text>
         </TouchableOpacity>
       </ScrollView>
     </View>
@@ -203,16 +132,6 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 15,
     marginBottom: 12,
-  },
-
-  icon: {
-    width: 45,
-    height: 45,
-    borderRadius: 12,
-    backgroundColor: '#fce8ee',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 13,
   },
 
   textContainer: {

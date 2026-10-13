@@ -1,3 +1,6 @@
+//no more use of this
+
+
 import {
   useCallback,
   useState,
@@ -28,8 +31,7 @@ import {
 import { supabase } from '../../../supabase';
 
 type Props = NativeStackScreenProps<
-  RootStackParamList,
-  'Designs'
+  RootStackParamList
 >;
 
 type Design = {
@@ -121,9 +123,6 @@ export default function DesignsScreen({
 
         <TouchableOpacity
           style={styles.addButton}
-          onPress={() =>
-            navigation.navigate('AddDesign')
-          }
         >
           <Text style={styles.addButtonText}>
             + Add

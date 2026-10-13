@@ -1,5 +1,4 @@
 import {
-  useEffect,
   useState,
 } from 'react';
 
@@ -11,7 +10,6 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View,
 } from 'react-native';
 
 import * as ImagePicker from 'expo-image-picker';
@@ -21,20 +19,21 @@ import {
 } from 'base64-arraybuffer';
 
 import {
+  NativeStackScreenProps,
+} from '@react-navigation/native-stack';
+
+import {
   supabase,
 } from '../../../supabase';
 
-type GarmentPart = {
-  id: string;
-  garment_id: string;
-  name: string;
-  gender: string;
-};
+import {
+  RootStackParamList,
+} from '../../navigator';
 
-type Garment = {
-  id: string;
-  name: string;
-};
+type Props = NativeStackScreenProps<
+  RootStackParamList,
+  'EditDesign'
+>;
 
 type Design = {
   id: string;
@@ -47,19 +46,10 @@ type Design = {
 export default function EditDesignScreen({
   route,
   navigation,
-}: any) {
-  const { design } = route.params as {
-    design: Design;
-  };
-
-  const [garmentParts, setGarmentParts] =
-    useState<GarmentPart[]>([]);
-
-  const [garments, setGarments] =
-    useState<Garment[]>([]);
-
-  const [garmentPartId, setGarmentPartId] =
-    useState(design.garment_part_id);
+}: Props) {
+  const {
+    design,
+  } = route.params;
 
   const [name, setName] =
     useState(design.name);
@@ -82,65 +72,6 @@ export default function EditDesignScreen({
 
   const [loading, setLoading] =
     useState(false);
-
-  useEffect(() => {
-    getGarmentParts();
-    getGarments();
-  }, []);
-
-  const getGarmentParts = async () => {
-    const { data, error } =
-      await supabase
-        .from('garment_parts')
-        .select(
-          'id, garment_id, name, gender'
-        )
-        .eq('available', true)
-        .order('name');
-
-    if (error) {
-      Alert.alert(
-        'Error',
-        error.message
-      );
-      return;
-    }
-
-    setGarmentParts(data || []);
-  };
-
-  const getGarments = async () => {
-    const { data, error } =
-      await supabase
-        .from('garments')
-        .select('id, name')
-        .eq('available', true)
-        .order('name');
-
-    if (error) {
-      Alert.alert(
-        'Error',
-        error.message
-      );
-      return;
-    }
-
-    setGarments(data || []);
-  };
-
-  const getGarmentName = (
-    garmentId: string
-  ) => {
-    const garment =
-      garments.find(
-        item =>
-          item.id === garmentId
-      );
-
-    return garment
-      ? garment.name
-      : 'Unknown Garment';
-  };
 
   const pickImage = async () => {
     const permission =
@@ -169,7 +100,9 @@ export default function EditDesignScreen({
       const selectedImage =
         result.assets[0];
 
-      setImage(selectedImage.uri);
+      setImage(
+        selectedImage.uri
+      );
 
       setImageBase64(
         selectedImage.base64 || null
@@ -211,28 +144,30 @@ export default function EditDesignScreen({
     const arrayBuffer =
       decode(imageBase64);
 
-    const { error } =
-      await supabase.storage
-        .from('garments')
-        .upload(
-          fileName,
-          arrayBuffer,
-          {
-            contentType: imageType,
-            upsert: false,
-          }
-        );
+    const {
+      error,
+    } = await supabase.storage
+      .from('garments')
+      .upload(
+        fileName,
+        arrayBuffer,
+        {
+          contentType: imageType,
+          upsert: false,
+        }
+      );
 
     if (error) {
       throw error;
     }
 
-    const { data } =
-      supabase.storage
-        .from('garments')
-        .getPublicUrl(
-          fileName
-        );
+    const {
+      data,
+    } = supabase.storage
+      .from('garments')
+      .getPublicUrl(
+        fileName
+      );
 
     return data.publicUrl;
   };
@@ -251,12 +186,13 @@ export default function EditDesignScreen({
       return;
     }
 
-    const { error } =
-      await supabase.storage
-        .from('garments')
-        .remove([
-          imagePath,
-        ]);
+    const {
+      error,
+    } = await supabase.storage
+      .from('garments')
+      .remove([
+        imagePath,
+      ]);
 
     if (error) {
       throw error;
@@ -264,14 +200,6 @@ export default function EditDesignScreen({
   };
 
   const updateDesign = async () => {
-    if (!garmentPartId) {
-      Alert.alert(
-        'Required',
-        'Please select a garment part.'
-      );
-      return;
-    }
-
     if (!name.trim()) {
       Alert.alert(
         'Required',
@@ -293,23 +221,24 @@ export default function EditDesignScreen({
         await deleteOldImage();
       }
 
-      const { error } =
-        await supabase
-          .from('designs')
-          .update({
-            garment_part_id:
-              garmentPartId,
-            name: name.trim(),
-            description:
-              description.trim() ||
-              null,
-            image_url:
-              imageUrl,
-          })
-          .eq(
-            'id',
-            design.id
-          );
+      const {
+        error,
+      } = await supabase
+        .from('designs')
+        .update({
+          garment_part_id:
+            design.garment_part_id,
+          name: name.trim(),
+          description:
+            description.trim() ||
+            null,
+          image_url:
+            imageUrl,
+        })
+        .eq(
+          'id',
+          design.id
+        );
 
       if (error) {
         throw error;
@@ -317,10 +246,15 @@ export default function EditDesignScreen({
 
       Alert.alert(
         'Success',
-        'Design updated successfully.'
+        'Design updated successfully.',
+        [
+          {
+            text: 'OK',
+            onPress: () =>
+              navigation.goBack(),
+          },
+        ]
       );
-
-      navigation.goBack();
     } catch (error: any) {
       Alert.alert(
         'Error',
@@ -341,53 +275,6 @@ export default function EditDesignScreen({
       <Text style={styles.title}>
         Edit Design
       </Text>
-
-      <Text style={styles.label}>
-        Garment Part
-      </Text>
-
-      {garmentParts.map(item => {
-        const garmentName =
-          getGarmentName(
-            item.garment_id
-          );
-
-        return (
-          <TouchableOpacity
-            key={item.id}
-            style={[
-              styles.partButton,
-              garmentPartId ===
-                item.id &&
-                styles.selectedPart,
-            ]}
-            onPress={() =>
-              setGarmentPartId(
-                item.id
-              )
-            }
-          >
-            <Text
-              style={[
-                styles.partText,
-                garmentPartId ===
-                  item.id &&
-                  styles.selectedPartText,
-              ]}
-            >
-              {garmentName} -{' '}
-              {item.name} -{' '}
-              {item.gender}
-            </Text>
-          </TouchableOpacity>
-        );
-      })}
-
-      {garmentParts.length === 0 && (
-        <Text style={styles.noParts}>
-          No available garment parts found.
-        </Text>
-      )}
 
       <Text style={styles.label}>
         Design Name
@@ -473,36 +360,6 @@ const styles = StyleSheet.create({
     color: '#444',
     marginBottom: 8,
     marginTop: 15,
-  },
-
-  partButton: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 14,
-    marginBottom: 8,
-    backgroundColor: '#fff',
-  },
-
-  selectedPart: {
-    borderColor: '#d96b8a',
-    backgroundColor: '#fff5f8',
-  },
-
-  partText: {
-    fontSize: 14,
-    color: '#444',
-  },
-
-  selectedPartText: {
-    color: '#d96b8a',
-    fontWeight: '600',
-  },
-
-  noParts: {
-    color: '#888',
-    fontSize: 14,
-    marginBottom: 10,
   },
 
   input: {

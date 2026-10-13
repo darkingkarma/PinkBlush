@@ -24,7 +24,7 @@ import {
 } from '../../navigator';
 
 import { supabase } from '../../../supabase';
-
+import { Ionicons } from '@expo/vector-icons';
 type Props = NativeStackScreenProps<
   RootStackParamList,
   'EditGarment'
@@ -330,11 +330,11 @@ export default function EditGarmentScreen({
             />
           ) : (
             <>
-              <Text
-                style={styles.imageIcon}
-              >
-                📷
-              </Text>
+              <Ionicons
+                name="image-outline"
+                size={45}
+                color="#d96b8a"
+              />
 
               <Text
                 style={styles.imageText}
