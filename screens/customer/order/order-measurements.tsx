@@ -81,7 +81,7 @@ export default function OrderMeasurementsScreen({
       return '-';
     }
 
-    return `${value} inches`;
+    return `${value} cm`;
   };
 
   const continueToReview = () => {
@@ -116,13 +116,6 @@ export default function OrderMeasurementsScreen({
         contentContainerStyle={styles.content}
       >
         <View style={styles.header}>
-          <TouchableOpacity
-            onPress={() => navigation.goBack()}
-          >
-            <Text style={styles.backButton}>
-              ‹
-            </Text>
-          </TouchableOpacity>
 
           <Text style={styles.title}>
             Order Measurements

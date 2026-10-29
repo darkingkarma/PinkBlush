@@ -1,31 +1,25 @@
-import {
-  useCallback,
-  useState,
-} from 'react';
+
+import { useCallback, useState } from 'react';
 
 import {
+  ActivityIndicator,
+  Alert,
   FlatList,
+  Image,
+  Modal,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
 
-import {
-  useFocusEffect,
-} from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 
-import {
-  NativeStackScreenProps,
-} from '@react-navigation/native-stack';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import {
-  RootStackParamList,
-} from '../../navigator';
+import type { RootStackParamList } from '../../navigator';
 
-import {
-  supabase,
-} from '../../../supabase';
+import { supabase } from '../../../supabase';
 
 type Props = NativeStackScreenProps<
   RootStackParamList,
@@ -45,13 +39,29 @@ type SelectedDesign = {
   id: string;
   name: string;
   image_url: string | null;
+  description?: string | null;
+};
+
+type Design = SelectedDesign & {
+  description: string | null;
 };
 
 type SelectedFabric = {
   id: string;
   name: string;
   price_addition: number;
+  image_url?: string | null;
+  description?: string | null;
 };
+
+type Fabric = SelectedFabric & {
+  description: string | null;
+  image_url: string | null;
+  price_addition: number;
+  available: boolean;
+};
+
+type ModalType = 'design' | 'fabric' | null;
 
 export default function ConfigurePartsScreen({
   route,
@@ -60,200 +70,284 @@ export default function ConfigurePartsScreen({
   const {
     garment,
     selectedPartIds,
-    selectedDesign,
-    selectedFabric,
+    selectedDesigns: initialSelectedDesigns,
+    selectedFabrics: initialSelectedFabrics,
   } = route.params;
 
-  const [parts, setParts] =
-    useState<GarmentPart[]>([]);
+  const [parts, setParts] = useState<GarmentPart[]>([]);
 
   const [selectedDesigns, setSelectedDesigns] =
-    useState<Record<string, SelectedDesign>>({});
+    useState<Record<string, SelectedDesign>>(
+      initialSelectedDesigns || {}
+    );
 
   const [selectedFabrics, setSelectedFabrics] =
-    useState<Record<string, SelectedFabric>>({});
+    useState<Record<string, SelectedFabric>>(
+      initialSelectedFabrics || {}
+    );
 
   const [quantities, setQuantities] =
     useState<Record<string, number>>({});
 
-  const [loading, setLoading] =
-    useState(true);
+  const [loading, setLoading] = useState(true);
+
+  // Modal state
+  const [modalType, setModalType] = useState<ModalType>(null);
+  const [activePart, setActivePart] =
+    useState<GarmentPart | null>(null);
+
+  const [designs, setDesigns] = useState<Design[]>([]);
+  const [fabrics, setFabrics] = useState<Fabric[]>([]);
+  const [loadingOptions, setLoadingOptions] = useState(false);
+
+  // Temporary selections are applied only when confirmed.
+  const [pendingDesign, setPendingDesign] =
+    useState<SelectedDesign | null>(null);
+
+  const [pendingFabric, setPendingFabric] =
+    useState<SelectedFabric | null>(null);
 
   const getParts = async () => {
     setLoading(true);
 
-    const {
-      data,
-      error,
-    } = await supabase
-      .from('garment_parts')
-      .select(
-        'id, name, description, price, gender, available'
-      )
-      .in('id', selectedPartIds)
-      .order('name');
+    try {
+      const { data, error } = await supabase
+        .from('garment_parts')
+        .select('id, name, description, price, gender, available')
+        .in('id', selectedPartIds)
+        .order('name');
 
-    if (error) {
-      console.log(error);
+      if (error) throw error;
+
+      setParts((data || []) as GarmentPart[]);
+    } catch (error) {
+      console.log('Error loading garment parts:', error);
+      Alert.alert('Error', 'Could not load garment parts.');
       setParts([]);
+    } finally {
       setLoading(false);
-      return;
     }
-
-    setParts(data || []);
-    setLoading(false);
   };
 
   useFocusEffect(
     useCallback(() => {
       getParts();
-
-      if (selectedDesign) {
-        setSelectedDesigns((current) => ({
-          ...current,
-          [selectedDesign.partId]:
-            selectedDesign.design,
-        }));
-      }
-
-      if (selectedFabric) {
-        setSelectedFabrics((current) => ({
-          ...current,
-          [selectedFabric.partId]:
-            selectedFabric.fabric,
-        }));
-      }
-    }, [
-      selectedDesign,
-      selectedFabric,
-    ])
+    }, [selectedPartIds])
   );
 
-  const increaseQuantity = (
-    partId: string
-  ) => {
+  const closeModal = () => {
+    setModalType(null);
+    setActivePart(null);
+    setPendingDesign(null);
+    setPendingFabric(null);
+  };
+
+  // Open design modal and load designs for this part.
+  const openDesignModal = async (part: GarmentPart) => {
+    setActivePart(part);
+    setModalType('design');
+    setLoadingOptions(true);
+    setDesigns([]);
+
+    setPendingDesign(selectedDesigns[part.id] || null);
+
+    try {
+      const { data, error } = await supabase
+        .from('designs')
+        .select('id, name, description, image_url')
+        .eq('garment_part_id', part.id)
+        .order('name');
+
+      if (error) throw error;
+
+      setDesigns((data || []) as Design[]);
+    } catch (error) {
+      console.log('Error loading designs:', error);
+      Alert.alert('Error', 'Could not load designs for this part.');
+    } finally {
+      setLoadingOptions(false);
+    }
+  };
+
+  // Open fabric modal using your existing relationship table.
+  const openFabricModal = async (part: GarmentPart) => {
+    setActivePart(part);
+    setModalType('fabric');
+    setLoadingOptions(true);
+    setFabrics([]);
+
+    setPendingFabric(selectedFabrics[part.id] || null);
+
+    try {
+      const { data, error } = await supabase
+        .from('garment_fabrics')
+        .select(`
+          fabric_id,
+          fabrics (
+            id,
+            name,
+            description,
+            image_url,
+            price_addition,
+            available
+          )
+        `)
+        .eq('garment_part_id', part.id);
+
+      if (error) throw error;
+
+      const fabricList = (data || [])
+        .map((item: any) => {
+          // Supabase relationships may return an object or an array.
+          const related = Array.isArray(item.fabrics)
+            ? item.fabrics[0]
+            : item.fabrics;
+
+          return related;
+        })
+        .filter(
+          (fabric: Fabric | null | undefined) =>
+            fabric && fabric.available
+        ) as Fabric[];
+
+      setFabrics(fabricList);
+    } catch (error) {
+      console.log('Error loading fabrics:', error);
+      Alert.alert('Error', 'Could not load fabrics for this part.');
+    } finally {
+      setLoadingOptions(false);
+    }
+  };
+
+  const confirmSelection = () => {
+    if (!activePart || !modalType) return;
+
+    if (modalType === 'design') {
+      if (!pendingDesign) {
+        Alert.alert('Choose a design', 'Please select a design first.');
+        return;
+      }
+
+      setSelectedDesigns((current) => ({
+        ...current,
+        [activePart.id]: pendingDesign,
+      }));
+    }
+
+    if (modalType === 'fabric') {
+      if (!pendingFabric) {
+        Alert.alert('Choose a fabric', 'Please select a fabric first.');
+        return;
+      }
+
+      setSelectedFabrics((current) => ({
+        ...current,
+        [activePart.id]: pendingFabric,
+      }));
+    }
+
+    closeModal();
+  };
+
+  const increaseQuantity = (partId: string) => {
     setQuantities((current) => ({
       ...current,
-      [partId]:
-        (current[partId] || 1) + 1,
+      [partId]: (current[partId] || 1) + 1,
     }));
   };
 
-  const decreaseQuantity = (
-    partId: string
-  ) => {
+  const decreaseQuantity = (partId: string) => {
     setQuantities((current) => {
-      const currentQuantity =
-        current[partId] || 1;
+      const quantity = current[partId] || 1;
 
-      if (currentQuantity <= 1) {
-        return current;
-      }
+      if (quantity <= 1) return current;
 
       return {
         ...current,
-        [partId]:
-          currentQuantity - 1,
+        [partId]: quantity - 1,
       };
     });
   };
 
-  const getUnitPrice = (
-    part: GarmentPart
-  ) => {
+  const getUnitPrice = (part: GarmentPart) => {
     const fabricAddition =
-      selectedFabrics[part.id]
-        ?.price_addition || 0;
+      selectedFabrics[part.id]?.price_addition || 0;
 
-    return (
-      Number(part.price) +
-      Number(fabricAddition)
-    );
+    return Number(part.price) + Number(fabricAddition);
   };
 
-  const getSubtotal = (
-    part: GarmentPart
-  ) => {
-    const quantity =
-      quantities[part.id] || 1;
-
-    return (
-      getUnitPrice(part) *
-      quantity
-    );
+  const getSubtotal = (part: GarmentPart) => {
+    return getUnitPrice(part) * (quantities[part.id] || 1);
   };
 
   const totalAmount = parts.reduce(
-    (total, part) =>
-      total + getSubtotal(part),
+    (total, part) => total + getSubtotal(part),
     0
   );
 
   const continueToMeasurements = () => {
+    if (parts.length === 0) {
+      Alert.alert('No parts', 'Please select at least one garment part.');
+      return;
+    }
+
     const items = parts.map((part) => ({
       partId: part.id,
-
       partName: part.name,
 
-      designId:
-        selectedDesigns[part.id]?.id ||
-        null,
+      designId: selectedDesigns[part.id]?.id || null,
+      designName: selectedDesigns[part.id]?.name || null,
+      designImage: selectedDesigns[part.id]?.image_url || null,
 
-      designName:
-        selectedDesigns[part.id]?.name ||
-        null,
+      fabricId: selectedFabrics[part.id]?.id || null,
+      fabricName: selectedFabrics[part.id]?.name || null,
 
-      fabricId:
-        selectedFabrics[part.id]?.id ||
-        null,
-
-      fabricName:
-        selectedFabrics[part.id]?.name ||
-        null,
-
-      quantity:
-        quantities[part.id] || 1,
-
-      unitPrice:
-        getUnitPrice(part),
-
-      subtotal:
-        getSubtotal(part),
+      quantity: quantities[part.id] || 1,
+      unitPrice: getUnitPrice(part),
+      subtotal: getSubtotal(part),
     }));
 
-    navigation.navigate(
-      'OrderMeasurements',
-      {
-        orderData: {
-          garment,
-          items,
-          totalAmount,
-        },
-      }
+    navigation.navigate('OrderMeasurements', {
+      orderData: {
+        garment,
+        items,
+        totalAmount,
+      },
+    });
+  };
+
+  const renderOptionImage = (imageUrl: string | null | undefined) => {
+    if (imageUrl) {
+      return (
+        <Image
+          source={{ uri: imageUrl }}
+          style={styles.optionImage}
+          resizeMode="cover"
+        />
+      );
+    }
+
+    return (
+      <View style={[styles.optionImage, styles.imagePlaceholder]}>
+        <Text style={styles.placeholderText}>No image</Text>
+      </View>
     );
   };
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>
-          Configure Parts
-        </Text>
-
-        <Text style={styles.subtitle}>
-          {garment.name}
-        </Text>
-
+        <Text style={styles.title}>Configure Parts</Text>
+        <Text style={styles.subtitle}>{garment.name}</Text>
         <Text style={styles.helperText}>
-          Configure each selected part of your garment.
+          Choose a design and fabric for each selected part.
         </Text>
       </View>
 
       {loading ? (
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyText}>
-            Loading selected parts...
-          </Text>
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color="#d96b8a" />
+          <Text style={styles.emptyText}>Loading selected parts...</Text>
         </View>
       ) : (
         <FlatList
@@ -261,13 +355,17 @@ export default function ConfigurePartsScreen({
           keyExtractor={(item) => item.id}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.list}
+          ListEmptyComponent={
+            <View style={styles.centered}>
+              <Text style={styles.emptyText}>
+                No garment parts were found.
+              </Text>
+            </View>
+          }
           ListFooterComponent={
             <View>
               <View style={styles.totalBox}>
-                <Text style={styles.totalLabel}>
-                  Total
-                </Text>
-
+                <Text style={styles.totalLabel}>Total</Text>
                 <Text style={styles.totalAmount}>
                   ₱{totalAmount.toFixed(2)}
                 </Text>
@@ -283,128 +381,297 @@ export default function ConfigurePartsScreen({
               </TouchableOpacity>
             </View>
           }
-          renderItem={({ item }) => (
-            <View style={styles.card}>
-              <Text style={styles.partName}>
-                {item.name}
-              </Text>
+          renderItem={({ item }) => {
+            const design = selectedDesigns[item.id];
+            const fabric = selectedFabrics[item.id];
 
-              <Text style={styles.gender}>
-                {item.gender}
-              </Text>
+            return (
+              <View style={styles.card}>
+                <Text style={styles.partName}>{item.name}</Text>
+                <Text style={styles.gender}>{item.gender}</Text>
 
-              <Text style={styles.price}>
-                ₱{Number(item.price).toFixed(2)}
-              </Text>
-
-              <Text style={styles.description}>
-                {item.description ||
-                  'No description available.'}
-              </Text>
-
-              <TouchableOpacity
-                style={styles.optionBox}
-                onPress={() =>
-                  navigation.navigate(
-                    'SelectDesign',
-                    {
-                      garmentPart: item,
-                      garment,
-                      selectedPartIds,
-                    }
-                  )
-                }
-              >
-                <Text style={styles.optionTitle}>
-                  Design
+                <Text style={styles.price}>
+                  Base price: ₱{Number(item.price).toFixed(2)}
                 </Text>
 
-                <Text style={styles.optionText}>
-                  {selectedDesigns[item.id]
-                    ?.name ||
-                    'Choose Design'}
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.optionBox}
-                onPress={() =>
-                  navigation.navigate(
-                    'SelectFabric',
-                    {
-                      garmentPart: item,
-                      garment,
-                      selectedPartIds,
-                    }
-                  )
-                }
-              >
-                <Text style={styles.optionTitle}>
-                  Fabric
-                </Text>
-
-                <Text style={styles.optionText}>
-                  {selectedFabrics[item.id]
-                    ?.name ||
-                    'Choose Fabric'}
-                </Text>
-              </TouchableOpacity>
-
-              <View style={styles.optionBox}>
-                <Text style={styles.optionTitle}>
-                  Quantity
-                </Text>
-
-                <View style={styles.quantityRow}>
-                  <TouchableOpacity
-                    style={styles.quantityButton}
-                    onPress={() =>
-                      decreaseQuantity(item.id)
-                    }
-                  >
-                    <Text
-                      style={
-                        styles.quantityButtonText
-                      }
-                    >
-                      -
-                    </Text>
-                  </TouchableOpacity>
-
-                  <Text style={styles.quantityText}>
-                    {quantities[item.id] || 1}
+                {!!item.description && (
+                  <Text style={styles.description}>
+                    {item.description}
                   </Text>
+                )}
 
-                  <TouchableOpacity
-                    style={styles.quantityButton}
-                    onPress={() =>
-                      increaseQuantity(item.id)
-                    }
-                  >
+                {/* DESIGN BUTTON */}
+                <TouchableOpacity
+                  style={styles.selectionBox}
+                  onPress={() => openDesignModal(item)}
+                >
+                  {renderOptionImage(design?.image_url)}
+
+                  <View style={styles.selectionInfo}>
+                    <Text style={styles.optionTitle}>Design</Text>
                     <Text
-                      style={
-                        styles.quantityButtonText
-                      }
+                      style={[
+                        styles.optionText,
+                        design && styles.selectedOptionText,
+                      ]}
                     >
-                      +
+                      {design?.name || 'Choose Design'}
                     </Text>
-                  </TouchableOpacity>
+                  </View>
+
+                  <Text style={styles.changeText}>
+                    {design ? 'Change' : 'Select'}
+                  </Text>
+                </TouchableOpacity>
+
+                {/* FABRIC BUTTON */}
+                <TouchableOpacity
+                  style={styles.selectionBox}
+                  onPress={() => openFabricModal(item)}
+                >
+                  {renderOptionImage(fabric?.image_url)}
+
+                  <View style={styles.selectionInfo}>
+                    <Text style={styles.optionTitle}>Fabric</Text>
+                    <Text
+                      style={[
+                        styles.optionText,
+                        fabric && styles.selectedOptionText,
+                      ]}
+                    >
+                      {fabric?.name || 'Choose Fabric'}
+                    </Text>
+                    {fabric && (
+                      <Text style={styles.additionText}>
+                        +₱{Number(fabric.price_addition).toFixed(2)}
+                      </Text>
+                    )}
+                  </View>
+
+                  <Text style={styles.changeText}>
+                    {fabric ? 'Change' : 'Select'}
+                  </Text>
+                </TouchableOpacity>
+
+                {/* QUANTITY */}
+                <View style={styles.quantityBox}>
+                  <Text style={styles.optionTitle}>Quantity</Text>
+
+                  <View style={styles.quantityRow}>
+                    <TouchableOpacity
+                      style={styles.quantityButton}
+                      onPress={() => decreaseQuantity(item.id)}
+                    >
+                      <Text style={styles.quantityButtonText}>−</Text>
+                    </TouchableOpacity>
+
+                    <Text style={styles.quantityText}>
+                      {quantities[item.id] || 1}
+                    </Text>
+
+                    <TouchableOpacity
+                      style={styles.quantityButton}
+                      onPress={() => increaseQuantity(item.id)}
+                    >
+                      <Text style={styles.quantityButtonText}>+</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* SUBTOTAL */}
+                <View style={styles.subtotalBox}>
+                  <Text style={styles.subtotalLabel}>Subtotal</Text>
+                  <Text style={styles.subtotalAmount}>
+                    ₱{getSubtotal(item).toFixed(2)}
+                  </Text>
                 </View>
               </View>
-
-              <View style={styles.subtotalBox}>
-                <Text style={styles.subtotalLabel}>
-                  Subtotal
-                </Text>
-
-                <Text style={styles.subtotalAmount}>
-                  ₱{getSubtotal(item).toFixed(2)}
-                </Text>
-              </View>
-            </View>
-          )}
+            );
+          }}
         />
       )}
+
+      {/* DESIGN AND FABRIC MODAL */}
+      <Modal
+        visible={modalType !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={closeModal}
+        statusBarTranslucent
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+
+            <View style={styles.modalHeader}>
+              <View style={styles.modalHeading}>
+                <Text style={styles.modalTitle}>
+                  {modalType === 'design'
+                    ? 'Choose a Design'
+                    : 'Choose a Fabric'}
+                </Text>
+
+                <Text style={styles.modalSubtitle}>
+                  {activePart?.name || 'Garment part'}
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.closeButton}
+                onPress={closeModal}
+              >
+                <Text style={styles.closeButtonText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {loadingOptions ? (
+              <View style={styles.modalLoading}>
+                <ActivityIndicator size="large" color="#d96b8a" />
+                <Text style={styles.emptyText}>
+                  Loading {modalType === 'design' ? 'designs' : 'fabrics'}...
+                </Text>
+              </View>
+            ) : modalType === 'design' ? (
+              <FlatList
+                data={designs}
+                keyExtractor={(item) => item.id}
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.modalList}
+                ListEmptyComponent={
+                  <View style={styles.emptyOptions}>
+                    <Text style={styles.emptyTitle}>
+                      No designs available
+                    </Text>
+                    <Text style={styles.emptyText}>
+                      No designs have been added for this part yet.
+                    </Text>
+                  </View>
+                }
+                renderItem={({ item }) => {
+                  const isSelected = pendingDesign?.id === item.id;
+
+                  return (
+                    <TouchableOpacity
+                      style={[
+                        styles.optionCard,
+                        isSelected && styles.optionCardSelected,
+                      ]}
+                      onPress={() => setPendingDesign(item)}
+                    >
+                      {renderOptionImage(item.image_url)}
+
+                      <View style={styles.optionCardInfo}>
+                        <Text style={styles.optionCardTitle}>
+                          {item.name}
+                        </Text>
+                        <Text style={styles.optionDescription}>
+                          {item.description || 'No description available.'}
+                        </Text>
+                      </View>
+
+                      <View
+                        style={[
+                          styles.radioCircle,
+                          isSelected && styles.radioCircleSelected,
+                        ]}
+                      >
+                        {isSelected && (
+                          <View style={styles.radioInner} />
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                }}
+              />
+            ) : (
+              <FlatList
+                data={fabrics}
+                keyExtractor={(item) => item.id}
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.modalList}
+                ListEmptyComponent={
+                  <View style={styles.emptyOptions}>
+                    <Text style={styles.emptyTitle}>
+                      No fabrics available
+                    </Text>
+                    <Text style={styles.emptyText}>
+                      No available fabrics are assigned to this part.
+                    </Text>
+                  </View>
+                }
+                renderItem={({ item }) => {
+                  const isSelected = pendingFabric?.id === item.id;
+
+                  return (
+                    <TouchableOpacity
+                      style={[
+                        styles.optionCard,
+                        isSelected && styles.optionCardSelected,
+                      ]}
+                      onPress={() => setPendingFabric(item)}
+                    >
+                      {renderOptionImage(item.image_url)}
+
+                      <View style={styles.optionCardInfo}>
+                        <Text style={styles.optionCardTitle}>
+                          {item.name}
+                        </Text>
+                        <Text style={styles.optionDescription}>
+                          {item.description || 'No description available.'}
+                        </Text>
+                        <Text style={styles.additionText}>
+                          +₱{Number(item.price_addition).toFixed(2)}
+                        </Text>
+                      </View>
+
+                      <View
+                        style={[
+                          styles.radioCircle,
+                          isSelected && styles.radioCircleSelected,
+                        ]}
+                      >
+                        {isSelected && (
+                          <View style={styles.radioInner} />
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                }}
+              />
+            )}
+
+            <View style={styles.modalFooter}>
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={closeModal}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.confirmButton,
+                  (
+                    loadingOptions ||
+                    (modalType === 'design' && !pendingDesign) ||
+                    (modalType === 'fabric' && !pendingFabric)
+                  ) && styles.confirmButtonDisabled,
+                ]}
+                disabled={
+                  loadingOptions ||
+                  (modalType === 'design' && !pendingDesign) ||
+                  (modalType === 'fabric' && !pendingFabric)
+                }
+                onPress={confirmSelection}
+              >
+                <Text style={styles.confirmButtonText}>
+                  Confirm Selection
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -443,14 +710,16 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingTop: 10,
     paddingBottom: 30,
+    flexGrow: 1,
   },
 
   card: {
     borderWidth: 1,
     borderColor: '#eee',
     borderRadius: 12,
-    padding: 18,
+    padding: 16,
     marginBottom: 15,
+    backgroundColor: '#fff',
   },
 
   partName: {
@@ -466,10 +735,10 @@ const styles = StyleSheet.create({
   },
 
   price: {
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '600',
     color: '#d96b8a',
-    marginTop: 5,
+    marginTop: 6,
   },
 
   description: {
@@ -477,15 +746,40 @@ const styles = StyleSheet.create({
     color: '#777',
     lineHeight: 20,
     marginTop: 8,
-    marginBottom: 15,
+    marginBottom: 6,
   },
 
-  optionBox: {
+  selectionBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
     borderWidth: 1,
     borderColor: '#eee',
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 10,
+    gap: 12,
+  },
+
+  optionImage: {
+    width: 66,
+    height: 66,
     borderRadius: 8,
-    padding: 12,
-    marginTop: 8,
+    backgroundColor: '#f5f5f5',
+  },
+
+  imagePlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  placeholderText: {
+    color: '#999',
+    fontSize: 10,
+    textAlign: 'center',
+  },
+
+  selectionInfo: {
+    flex: 1,
   },
 
   optionTitle: {
@@ -500,6 +794,32 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
 
+  selectedOptionText: {
+    color: '#d96b8a',
+    fontWeight: '600',
+  },
+
+  changeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#d96b8a',
+  },
+
+  additionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#d96b8a',
+    marginTop: 5,
+  },
+
+  quantityBox: {
+    borderWidth: 1,
+    borderColor: '#eee',
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 10,
+  },
+
   quantityRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -507,8 +827,8 @@ const styles = StyleSheet.create({
   },
 
   quantityButton: {
-    width: 40,
-    height: 40,
+    width: 38,
+    height: 38,
     borderWidth: 1,
     borderColor: '#d96b8a',
     borderRadius: 8,
@@ -531,7 +851,7 @@ const styles = StyleSheet.create({
   },
 
   subtotalBox: {
-    marginTop: 12,
+    marginTop: 14,
     paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: '#eee',
@@ -588,14 +908,202 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
 
-  emptyContainer: {
+  centered: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 24,
   },
 
   emptyText: {
     fontSize: 14,
     color: '#888',
+    textAlign: 'center',
+    marginTop: 8,
+    lineHeight: 20,
+  },
+
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
+  },
+
+  modalSheet: {
+    height: '85%',
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 10,
+    paddingHorizontal: 18,
+    paddingBottom: 20,
+  },
+
+  modalHandle: {
+    width: 42,
+    height: 5,
+    borderRadius: 5,
+    backgroundColor: '#ddd',
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+
+  modalHeading: {
+    flex: 1,
+  },
+
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#333',
+  },
+
+  modalSubtitle: {
+    fontSize: 14,
+    color: '#d96b8a',
+    marginTop: 4,
+  },
+
+  closeButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#f5f5f5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 12,
+  },
+
+  closeButtonText: {
+    fontSize: 16,
+    color: '#555',
+  },
+
+  modalLoading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  modalList: {
+    paddingBottom: 12,
+    flexGrow: 1,
+  },
+
+  optionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#eee',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 10,
+    gap: 12,
+  },
+
+  optionCardSelected: {
+    borderColor: '#d96b8a',
+    backgroundColor: '#fff7fa',
+  },
+
+  optionCardInfo: {
+    flex: 1,
+  },
+
+  optionCardTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#333',
+  },
+
+  optionDescription: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: '#888',
+    marginTop: 4,
+  },
+
+  radioCircle: {
+    width: 22,
+    height: 22,
+    borderWidth: 1.5,
+    borderColor: '#ccc',
+    borderRadius: 11,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  radioCircleSelected: {
+    borderColor: '#d96b8a',
+  },
+
+  radioInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#d96b8a',
+  },
+
+  emptyOptions: {
+    padding: 25,
+    alignItems: 'center',
+  },
+
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#333',
+    textAlign: 'center',
+  },
+
+  modalFooter: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+  },
+
+  cancelButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 10,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  cancelButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#555',
+  },
+
+  confirmButton: {
+    flex: 1.6,
+    backgroundColor: '#d96b8a',
+    borderRadius: 10,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  confirmButtonDisabled: {
+    opacity: 0.45,
+  },
+
+  confirmButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#fff',
   },
 });

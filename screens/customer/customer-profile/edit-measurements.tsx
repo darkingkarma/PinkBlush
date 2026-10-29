@@ -179,22 +179,9 @@ export default function EditMeasurementsScreen({
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
       >
-        <View style={styles.header}>
-          <TouchableOpacity
-            onPress={() => navigation.goBack()}
-          >
-            <Text style={styles.backButton}>‹</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.title}>
-            Edit Measurements
-          </Text>
-
-          <View style={styles.headerSpace} />
-        </View>
 
         <Text style={styles.unitText}>
-          All measurements are in inches.
+          All measurements are in centimeters (cm).
         </Text>
 
         <Text style={styles.sectionTitle}>
@@ -308,8 +295,8 @@ function MeasurementInput({
           onChangeText={onChangeText}
         />
 
-        <Text style={styles.inches}>
-          inches
+        <Text style={styles.unitLabel}>
+          cm
         </Text>
       </View>
     </View>
@@ -400,7 +387,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
 
-  inches: {
+  unitLabel: {
     marginLeft: 10,
     fontSize: 14,
     color: '#666',

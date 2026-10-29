@@ -1,8 +1,10 @@
+
 import {
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
+  Alert,
 } from 'react-native';
 
 import {
@@ -13,6 +15,8 @@ import {
   RootStackParamList,
 } from '../navigator';
 
+import { supabase } from '../../supabase';
+
 type Props = NativeStackScreenProps<
   RootStackParamList,
   'StaffDashboard'
@@ -21,6 +25,36 @@ type Props = NativeStackScreenProps<
 export default function StaffDashboard({
   navigation,
 }: Props) {
+  const handleLogout = async () => {
+    Alert.alert(
+      'Logout',
+      'Are you sure you want to log out?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Logout',
+          style: 'destructive',
+          onPress: async () => {
+            const { error } = await supabase.auth.signOut();
+
+            if (error) {
+              Alert.alert('Logout Failed', error.message);
+              return;
+            }
+
+            navigation.reset({
+              index: 0,
+              routes: [{ name: 'Login' }],
+            });
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>
@@ -39,6 +73,26 @@ export default function StaffDashboard({
       >
         <Text style={styles.buttonText}>
           Manage Garments
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.button}
+        onPress={() =>
+          navigation.navigate('CustomOrder')
+        }
+      >
+        <Text style={styles.buttonText}>
+          Custom Orders
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.logoutButton}
+        onPress={handleLogout}
+      >
+        <Text style={styles.logoutButtonText}>
+          Logout
         </Text>
       </TouchableOpacity>
     </View>
@@ -74,10 +128,28 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     alignItems: 'center',
+    marginBottom: 12,
   },
 
   buttonText: {
     color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+
+  logoutButton: {
+    width: '100%',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#d96b8a',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+    marginTop: 3,
+  },
+
+  logoutButtonText: {
+    color: '#d96b8a',
     fontSize: 16,
     fontWeight: 'bold',
   },

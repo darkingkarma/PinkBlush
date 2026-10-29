@@ -83,14 +83,10 @@ export default function ProfileScreen({ navigation }: Props) {
           text: 'Log Out',
           style: 'destructive',
           onPress: async () => {
-            const { error } =
-              await supabase.auth.signOut();
+            const { error } = await supabase.auth.signOut();
 
             if (error) {
-              Alert.alert(
-                'Error',
-                'Failed to log out.'
-              );
+              Alert.alert('Logout Failed', error.message);
             }
           },
         },

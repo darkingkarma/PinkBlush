@@ -65,7 +65,7 @@ export default function MeasurementsScreen({
       return '-';
     }
 
-    return `${value} inches`;
+    return `${value} cm`;
   };
 
   return (
@@ -74,19 +74,6 @@ export default function MeasurementsScreen({
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
       >
-        <View style={styles.header}>
-          <TouchableOpacity
-            onPress={() => navigation.goBack()}
-          >
-            <Text style={styles.backButton}>‹</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.title}>
-            My Measurements
-          </Text>
-
-          <View style={styles.headerSpace} />
-        </View>
 
         <Text style={styles.sectionTitle}>
           Upper Body

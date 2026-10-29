@@ -21,8 +21,9 @@ export default function LoginScreen({ navigation }: Props) {
   const [usernameOrEmail, setUsernameOrEmail] = useState('');
   const [password, setPassword] = useState('');
 
+  
   const handleLogin = async () => {
-    if (!usernameOrEmail || !password) {
+    if (!usernameOrEmail.trim() || !password) {
       Alert.alert(
         'Error',
         'Please enter your username/email and password.'
@@ -30,65 +31,72 @@ export default function LoginScreen({ navigation }: Props) {
       return;
     }
 
-    let email = usernameOrEmail.trim();
+    try {
+      let email = usernameOrEmail.trim();
 
-    // If user entered a username
-    if (!email.includes('@')) {
-      const { data, error } = await supabase.rpc(
-        'get_email_by_username',
-        {
-          input_username: email,
+      // Convert username to email if needed
+      if (!email.includes('@')) {
+        const { data, error } = await supabase.rpc(
+          'get_email_by_username',
+          {
+            input_username: email,
+          }
+        );
+
+        if (error || !data) {
+          Alert.alert('Login Failed', 'Username not found.');
+          return;
         }
-      );
 
-      if (error || !data) {
-        Alert.alert('Login Failed', 'Username not found.');
+        email = data;
+      }
+
+      // Sign in with Supabase
+      const { data: loginData, error: loginError } =
+        await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+
+      if (loginError) {
+        Alert.alert('Login Failed', loginError.message);
         return;
       }
 
-      email = data;
-    }
+      // Get the user's role
+      const { data: profile, error: profileError } =
+        await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', loginData.user.id)
+          .single();
 
-    // Login using email and password
-    const { data: loginData, error: loginError } =
-      await supabase.auth.signInWithPassword({
-        email: email,
-        password: password,
-      });
+      if (profileError || !profile) {
+        Alert.alert(
+          'Login Failed',
+          'User profile was not found.'
+        );
 
-    if (loginError) {
-      Alert.alert('Login Failed', loginError.message);
-      return;
-    }
+        await supabase.auth.signOut();
+        return;
+      }
 
-    // Get the logged-in user's ID
-    const userId = loginData.user.id;
-
-    // Get the user's profile and role
-    const { data: profile, error: profileError } =
-      await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', userId)
-        .single();
-
-    if (profileError || !profile) {
+      // Navigate to the correct screen
+      if (profile.role === 'staff') {
+        navigation.replace('StaffDashboard');
+      } else {
+        navigation.replace('Main');
+      }
+    } catch (error) {
       Alert.alert(
         'Login Failed',
-        'User profile was not found.'
+        error instanceof Error
+          ? error.message
+          : 'Something went wrong. Please try again.'
       );
-
-      await supabase.auth.signOut();
-      return;
-    }
-
-    // Check the user's role
-    if (profile.role === 'staff') {
-      navigation.replace('StaffDashboard');
-    } else {
-      navigation.replace('Main');
     }
   };
+
 
   return (
     <View style={styles.container}>

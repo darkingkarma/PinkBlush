@@ -8,17 +8,9 @@ import {
 
 import { Ionicons } from '@expo/vector-icons';
 
-import {
-  BottomTabScreenProps,
-} from '@react-navigation/bottom-tabs';
-
-import {
-  CompositeScreenProps,
-} from '@react-navigation/native';
-
-import {
-  NativeStackScreenProps,
-} from '@react-navigation/native-stack';
+import { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
+import { CompositeScreenProps } from '@react-navigation/native';
+import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import {
   MainTabParamList,
@@ -37,6 +29,7 @@ export default function HomeScreen({ navigation }: Props) {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
       >
+        {/* Header */}
         <View style={styles.header}>
           <View>
             <Text style={styles.brand}>Pink Blush</Text>
@@ -55,60 +48,117 @@ export default function HomeScreen({ navigation }: Props) {
           </TouchableOpacity>
         </View>
 
+        {/* Order Options */}
         <View style={styles.heroCard}>
           <Text style={styles.heroTitle}>
-            Create Your Perfect Garment
+            What Would You Like to Order?
           </Text>
 
           <Text style={styles.heroText}>
-            Start a new order and customize your garment according to your
-            preferred design, measurements, fabric, and color.
+            Create a custom garment based on your ideas, or browse
+            our available products and customize your preferred style.
           </Text>
 
+          {/* Custom Order */}
           <TouchableOpacity
-            style={styles.orderButton}
-            onPress={() =>
-              navigation.navigate('CustomerGarments')
-            }
+            style={styles.customOrderButton}
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate('CustomOrder')}
           >
-            <Text style={styles.orderButtonText}>
-              Create New Order
+            <Ionicons
+              name="color-wand-outline"
+              size={21}
+              color="#d96b8a"
+              style={styles.buttonIcon}
+            />
+
+            <Text style={styles.customOrderButtonText}>
+              Custom Order
             </Text>
 
             <Ionicons
               name="arrow-forward"
               size={20}
               color="#d96b8a"
-              style={styles.arrow}
             />
           </TouchableOpacity>
+
+          {/* Or Divider */}
+          <View style={styles.orContainer}>
+            <View style={styles.orLine} />
+            <Text style={styles.orText}>OR</Text>
+            <View style={styles.orLine} />
+          </View>
+
+          {/* Catalog */}
+          <TouchableOpacity
+            style={styles.catalogButton}
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate('Catalog')}
+          >
+            <Ionicons
+              name="bag-handle-outline"
+              size={21}
+              color="#fff"
+              style={styles.buttonIcon}
+            />
+
+            <Text style={styles.catalogButtonText}>
+              Browse Available Products
+            </Text>
+
+            <Ionicons
+              name="arrow-forward"
+              size={20}
+              color="#fff"
+            />
+          </TouchableOpacity>
+
+          <Text style={styles.heroFootnote}>
+            Custom designs or ready-to-customize garments — the choice is yours!
+          </Text>
         </View>
 
+        {/* My Orders */}
         <Text style={styles.sectionTitle}>My Orders</Text>
 
         <View style={styles.statusRow}>
-          <View style={styles.statusCard}>
+          <TouchableOpacity
+            style={styles.statusCard}
+            activeOpacity={0.8}
+            onPress={() => navigation.navigate('Orders')}
+          >
             <Text style={styles.statusNumber}>0</Text>
             <Text style={styles.statusLabel}>Pending</Text>
-          </View>
+          </TouchableOpacity>
 
-          <View style={styles.statusCard}>
+          <TouchableOpacity
+            style={styles.statusCard}
+            activeOpacity={0.8}
+            onPress={() => navigation.navigate('Orders')}
+          >
             <Text style={styles.statusNumber}>0</Text>
             <Text style={styles.statusLabel}>In Production</Text>
-          </View>
+          </TouchableOpacity>
 
-          <View style={styles.statusCard}>
+          <TouchableOpacity
+            style={styles.statusCard}
+            activeOpacity={0.8}
+            onPress={() => navigation.navigate('Orders')}
+          >
             <Text style={styles.statusNumber}>0</Text>
             <Text style={styles.statusLabel}>Completed</Text>
-          </View>
+          </TouchableOpacity>
         </View>
 
+        {/* Quick Actions */}
         <Text style={styles.sectionTitle}>Quick Actions</Text>
 
         <View style={styles.actionRow}>
           <TouchableOpacity
             style={styles.actionCard}
-            onPress={() => {}}
+            activeOpacity={0.8}
+            onPress={() => navigation.navigate('Orders')}
           >
             <Ionicons
               name="cube-outline"
@@ -117,9 +167,7 @@ export default function HomeScreen({ navigation }: Props) {
               style={styles.actionIcon}
             />
 
-            <Text style={styles.actionTitle}>
-              Track Orders
-            </Text>
+            <Text style={styles.actionTitle}>Track Orders</Text>
 
             <Text style={styles.actionText}>
               Check your order status
@@ -128,7 +176,8 @@ export default function HomeScreen({ navigation }: Props) {
 
           <TouchableOpacity
             style={styles.actionCard}
-            onPress={() => {}}
+            activeOpacity={0.8}
+            onPress={() => navigation.navigate('Orders')}
           >
             <Ionicons
               name="receipt-outline"
@@ -137,16 +186,15 @@ export default function HomeScreen({ navigation }: Props) {
               style={styles.actionIcon}
             />
 
-            <Text style={styles.actionTitle}>
-              Order History
-            </Text>
+            <Text style={styles.actionTitle}>Order History</Text>
 
             <Text style={styles.actionText}>
-              View previous orders
+              View your submitted orders
             </Text>
           </TouchableOpacity>
         </View>
 
+        {/* Information Card */}
         <View style={styles.infoCard}>
           <Ionicons
             name="sparkles-outline"
@@ -228,26 +276,75 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     lineHeight: 21,
-    marginBottom: 20,
+    marginBottom: 22,
   },
 
-  orderButton: {
+  customOrderButton: {
     backgroundColor: '#fff',
     borderRadius: 12,
-    padding: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 15,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
   },
 
-  orderButtonText: {
+  customOrderButtonText: {
     color: '#d96b8a',
     fontSize: 15,
     fontWeight: 'bold',
+    flex: 1,
   },
 
-  arrow: {
-    marginLeft: 8,
+  buttonIcon: {
+    marginRight: 10,
+  },
+
+  orContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 17,
+  },
+
+  orLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.5)',
+  },
+
+  orText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+    marginHorizontal: 14,
+  },
+
+  catalogButton: {
+    backgroundColor: '#b94f70',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 15,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.45)',
+  },
+
+  catalogButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
+    flex: 1,
+  },
+
+  heroFootnote: {
+    color: '#fff',
+    fontSize: 11,
+    lineHeight: 16,
+    textAlign: 'center',
+    marginTop: 15,
+    opacity: 0.9,
   },
 
   sectionTitle: {
