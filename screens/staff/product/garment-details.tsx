@@ -1,3 +1,4 @@
+
 import {
   useCallback,
   useState,
@@ -67,6 +68,12 @@ type GarmentFabric = {
   fabric_id: string;
 };
 
+type DesignFabric = {
+  id: string;
+  design_id: string;
+  fabric_id: string;
+};
+
 export default function GarmentDetailsScreen({
   route,
   navigation,
@@ -76,104 +83,122 @@ export default function GarmentDetailsScreen({
   const [parts, setParts] = useState<Part[]>([]);
   const [designs, setDesigns] = useState<Design[]>([]);
   const [fabrics, setFabrics] = useState<Fabric[]>([]);
+
   const [garmentFabrics, setGarmentFabrics] = useState<
     GarmentFabric[]
   >([]);
+
+  const [designFabrics, setDesignFabrics] = useState<
+    DesignFabric[]
+  >([]);
+
   const [loading, setLoading] = useState(false);
 
   const getData = async () => {
     setLoading(true);
 
-    const { data: partsData, error: partsError } =
-      await supabase
+    try {
+      const {
+        data: partsData,
+        error: partsError,
+      } = await supabase
         .from('garment_parts')
         .select('*')
         .eq('garment_id', garment.id)
         .order('name');
 
-    if (partsError) {
-      Alert.alert(
-        'Error',
-        partsError.message
-      );
-      setLoading(false);
-      return;
-    }
+      if (partsError) {
+        throw partsError;
+      }
 
-    const partIds =
-      (partsData || []).map(
+      const partIds = (partsData || []).map(
         (part) => part.id
       );
 
-    let designsData: Design[] = [];
+      let designsData: Design[] = [];
 
-    if (partIds.length > 0) {
-      const { data, error: designsError } =
-        await supabase
+      if (partIds.length > 0) {
+        const {
+          data,
+          error: designsError,
+        } = await supabase
           .from('designs')
           .select('*')
-          .in(
-            'garment_part_id',
-            partIds
-          );
+          .in('garment_part_id', partIds);
 
-      if (designsError) {
-        Alert.alert(
-          'Error',
-          designsError.message
-        );
-        setLoading(false);
-        return;
+        if (designsError) {
+          throw designsError;
+        }
+
+        designsData = data || [];
       }
 
-      designsData = data || [];
-    }
-
-    const { data: fabricsData, error: fabricsError } =
-      await supabase
+      const {
+        data: fabricsData,
+        error: fabricsError,
+      } = await supabase
         .from('fabrics')
         .select('*')
         .order('name');
 
-    if (fabricsError) {
-      Alert.alert(
-        'Error',
-        fabricsError.message
-      );
-      setLoading(false);
-      return;
-    }
-
-    let garmentFabricsData: GarmentFabric[] = [];
-
-    if (partIds.length > 0) {
-      const { data, error: garmentFabricsError } =
-        await supabase
-          .from('garment_fabrics')
-          .select('*')
-          .in(
-            'garment_part_id',
-            partIds
-          );
-
-      if (garmentFabricsError) {
-        Alert.alert(
-          'Error',
-          garmentFabricsError.message
-        );
-        setLoading(false);
-        return;
+      if (fabricsError) {
+        throw fabricsError;
       }
 
-      garmentFabricsData = data || [];
+      let garmentFabricsData: GarmentFabric[] = [];
+
+      if (partIds.length > 0) {
+        const {
+          data,
+          error: garmentFabricsError,
+        } = await supabase
+          .from('garment_fabrics')
+          .select('*')
+          .in('garment_part_id', partIds);
+
+        if (garmentFabricsError) {
+          throw garmentFabricsError;
+        }
+
+        garmentFabricsData = data || [];
+      }
+
+      let designFabricsData: DesignFabric[] = [];
+
+      const designIds = designsData.map(
+        (design) => design.id
+      );
+
+      if (designIds.length > 0) {
+        const {
+          data,
+          error: designFabricsError,
+        } = await supabase
+          .from('design_fabrics')
+          .select('*')
+          .in('design_id', designIds);
+
+        if (designFabricsError) {
+          throw designFabricsError;
+        }
+
+        designFabricsData = data || [];
+      }
+
+      setParts(partsData || []);
+      setDesigns(designsData);
+      setFabrics(fabricsData || []);
+      setGarmentFabrics(garmentFabricsData);
+      setDesignFabrics(designFabricsData);
+
+    } catch (error: any) {
+      Alert.alert(
+        'Error',
+        error.message
+      );
+    } finally {
+      setLoading(false);
     }
-
-    setParts(partsData || []);
-    setDesigns(designsData);
-    setFabrics(fabricsData || []);
-    setGarmentFabrics(garmentFabricsData);
-
-    setLoading(false);
   };
 
   useFocusEffect(
@@ -231,6 +256,7 @@ export default function GarmentDetailsScreen({
     );
   };
 
+  // Existing garment-part fabric assignment
   const toggleFabric = async (
     partId: string,
     fabricId: string
@@ -247,10 +273,7 @@ export default function GarmentDetailsScreen({
         const { error } = await supabase
           .from('garment_fabrics')
           .delete()
-          .eq(
-            'id',
-            existingAssignment.id
-          );
+          .eq('id', existingAssignment.id);
 
         if (error) {
           throw error;
@@ -268,7 +291,64 @@ export default function GarmentDetailsScreen({
         }
       }
 
-      getData();
+      await getData();
+
+    } catch (error: any) {
+      Alert.alert(
+        'Error',
+        error.message
+      );
+    }
+  };
+
+  // NEW: Assign or remove fabric for an individual design
+  const toggleDesignFabric = async (
+    designId: string,
+    fabricId: string
+  ) => {
+    const existingAssignment =
+      designFabrics.find(
+        (item) =>
+          item.design_id === designId &&
+          item.fabric_id === fabricId
+      );
+
+    try {
+      if (existingAssignment) {
+        const { error } = await supabase
+          .from('design_fabrics')
+          .delete()
+          .eq('id', existingAssignment.id);
+
+        if (error) {
+          throw error;
+        }
+
+        Alert.alert(
+          'Success',
+          'Fabric removed from this design.'
+        );
+
+      } else {
+        const { error } = await supabase
+          .from('design_fabrics')
+          .insert({
+            design_id: designId,
+            fabric_id: fabricId,
+          });
+
+        if (error) {
+          throw error;
+        }
+
+        Alert.alert(
+          'Success',
+          'Fabric assigned to this design.'
+        );
+      }
+
+      await getData();
+
     } catch (error: any) {
       Alert.alert(
         'Error',
@@ -308,7 +388,7 @@ export default function GarmentDetailsScreen({
     return (
       <View style={styles.partCard}>
         <View style={styles.partHeader}>
-          <View>
+          <View style={styles.partDetails}>
             <Text style={styles.partName}>
               {item.name}
             </Text>
@@ -376,9 +456,7 @@ export default function GarmentDetailsScreen({
                             error: designsError,
                           } = await supabase
                             .from('designs')
-                            .select(
-                              'image_url'
-                            )
+                            .select('image_url')
                             .eq(
                               'garment_part_id',
                               item.id
@@ -397,54 +475,34 @@ export default function GarmentDetailsScreen({
                               .map((design) => {
                                 return design
                                   .image_url!
-                                  .split(
-                                    '/garments/'
-                                  )[1];
+                                  .split('/garments/')[1];
                               })
                               .filter(Boolean);
 
-                          if (
-                            imagePaths.length >
-                            0
-                          ) {
+                          if (imagePaths.length > 0) {
                             const {
-                              error:
-                                storageError,
-                            } =
-                              await supabase.storage
-                                .from(
-                                  'garments'
-                                )
-                                .remove(
-                                  imagePaths
-                                );
+                              error: storageError,
+                            } = await supabase.storage
+                              .from('garments')
+                              .remove(imagePaths);
 
-                            if (
-                              storageError
-                            ) {
+                            if (storageError) {
                               throw storageError;
                             }
                           }
 
-                          const { error } =
-                            await supabase
-                              .from(
-                                'garment_parts'
-                              )
-                              .delete()
-                              .eq(
-                                'id',
-                                item.id
-                              );
+                          const { error } = await supabase
+                            .from('garment_parts')
+                            .delete()
+                            .eq('id', item.id);
 
                           if (error) {
                             throw error;
                           }
 
                           getData();
-                        } catch (
-                          error: any
-                        ) {
+
+                        } catch (error: any) {
                           Alert.alert(
                             'Error',
                             error.message
@@ -469,6 +527,7 @@ export default function GarmentDetailsScreen({
           </Text>
         ) : null}
 
+        {/* DESIGNS */}
         <View style={styles.designSection}>
           <Text style={styles.designTitle}>
             Designs
@@ -479,82 +538,184 @@ export default function GarmentDetailsScreen({
               No designs added yet.
             </Text>
           ) : (
-            partDesigns.map((design) => (
-              <View
-                key={design.id}
-                style={styles.designCard}
-              >
-                {design.image_url ? (
-                  <Image
-                    source={{
-                      uri: design.image_url,
-                    }}
-                    style={styles.designImage}
-                  />
-                ) : null}
+            partDesigns.map((design) => {
+              const assignedDesignFabrics =
+                designFabrics.filter(
+                  (assignment) =>
+                    assignment.design_id === design.id
+                );
 
-                <View style={styles.designInfo}>
-                  <Text
-                    style={styles.designName}
-                  >
-                    {design.name}
-                  </Text>
+              const assignedFabricIds =
+                assignedDesignFabrics.map(
+                  (assignment) => assignment.fabric_id
+                );
 
-                  {design.description ? (
-                    <Text
-                      style={
-                        styles.designDescription
-                      }
-                    >
-                      {design.description}
-                    </Text>
+              const assignedFabrics =
+                assignedFabricIds
+                  .map((fabricId) =>
+                    fabrics.find(
+                      (fabric) =>
+                        fabric.id === fabricId
+                    )
+                  )
+                  .filter(
+                    (fabric): fabric is Fabric =>
+                      fabric !== undefined
+                  );
+
+              // Only fabrics already assigned to this
+              // garment part can be assigned to its design.
+              const availableForDesign =
+                partFabrics.filter(
+                  (fabric) =>
+                    fabric.available &&
+                    !assignedFabricIds.includes(fabric.id)
+                );
+
+              return (
+                <View
+                  key={design.id}
+                  style={styles.designCard}
+                >
+                  {design.image_url ? (
+                    <Image
+                      source={{
+                        uri: design.image_url,
+                      }}
+                      style={styles.designImage}
+                    />
                   ) : null}
 
-                  <View
-                    style={
-                      styles.designActions
-                    }
-                  >
-                    <TouchableOpacity
-                      style={styles.editButton}
-                      onPress={() =>
-                        navigation.navigate(
-                          'EditDesign',
-                          {
-                            design,
-                          }
-                        )
-                      }
-                    >
-                      <Text
-                        style={styles.editText}
-                      >
-                        Edit
-                      </Text>
-                    </TouchableOpacity>
+                  <View style={styles.designInfo}>
+                    <Text style={styles.designName}>
+                      {design.name}
+                    </Text>
 
-                    <TouchableOpacity
-                      style={
-                        styles.deleteButton
-                      }
-                      onPress={() =>
-                        deleteDesign(
-                          design
-                        )
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.deleteText
+                    {design.description ? (
+                      <Text style={styles.designDescription}>
+                        {design.description}
+                      </Text>
+                    ) : null}
+
+                    <View style={styles.designActions}>
+                      <TouchableOpacity
+                        style={styles.editButton}
+                        onPress={() =>
+                          navigation.navigate(
+                            'EditDesign',
+                            {
+                              design,
+                            }
+                          )
                         }
                       >
-                        Delete
+                        <Text style={styles.editText}>
+                          Edit
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.deleteButton}
+                        onPress={() =>
+                          deleteDesign(design)
+                        }
+                      >
+                        <Text style={styles.deleteText}>
+                          Delete
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+
+                  {/* NEW DESIGN-SPECIFIC FABRICS */}
+                  <View style={styles.designFabricSection}>
+                    <Text style={styles.designFabricTitle}>
+                      Fabrics for this Design
+                    </Text>
+
+                    {assignedFabrics.length === 0 ? (
+                      <Text style={styles.noFabrics}>
+                        No fabrics assigned to this design.
                       </Text>
-                    </TouchableOpacity>
+                    ) : (
+                      assignedFabrics.map((fabric) => (
+                        <View
+                          key={fabric.id}
+                          style={styles.designFabricCard}
+                        >
+                          <View style={styles.fabricInfo}>
+                            <Text style={styles.fabricName}>
+                              {fabric.name}
+                            </Text>
+
+                            <Text style={styles.fabricPrice}>
+                              Price Addition: ₱
+                              {Number(
+                                fabric.price_addition
+                              ).toFixed(2)}
+                            </Text>
+                          </View>
+
+                          <TouchableOpacity
+                            style={styles.removeFabricButton}
+                            onPress={() =>
+                              toggleDesignFabric(
+                                design.id,
+                                fabric.id
+                              )
+                            }
+                          >
+                            <Text style={styles.removeFabricText}>
+                              Remove
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      ))
+                    )}
+
+                    <Text style={styles.availableFabricTitle}>
+                      Available Fabrics for this Design
+                    </Text>
+
+                    {availableForDesign.length === 0 ? (
+                      <Text style={styles.noFabrics}>
+                        No additional fabrics available.
+                      </Text>
+                    ) : (
+                      availableForDesign.map((fabric) => (
+                        <TouchableOpacity
+                          key={fabric.id}
+                          style={styles.availableFabricButton}
+                          onPress={() =>
+                            toggleDesignFabric(
+                              design.id,
+                              fabric.id
+                            )
+                          }
+                        >
+                          <View style={styles.fabricInfo}>
+                            <Text style={styles.availableFabricName}>
+                              {fabric.name}
+                            </Text>
+
+                            <Text style={styles.availableFabricPrice}>
+                              Price Addition: ₱
+                              {Number(
+                                fabric.price_addition
+                              ).toFixed(2)}
+                            </Text>
+                          </View>
+
+                          <Text style={styles.assignText}>
+                            + Assign
+                          </Text>
+                        </TouchableOpacity>
+                      ))
+                    )}
                   </View>
                 </View>
-              </View>
-            ))
+              );
+            })
           )}
 
           <TouchableOpacity
@@ -574,9 +735,15 @@ export default function GarmentDetailsScreen({
           </TouchableOpacity>
         </View>
 
+        {/* EXISTING GARMENT-PART FABRICS */}
         <View style={styles.fabricSection}>
           <Text style={styles.fabricTitle}>
-            Fabrics
+            Fabrics Assigned to this Part
+          </Text>
+
+          <Text style={styles.sectionDescription}>
+            These are the fabrics that can be assigned
+            to designs under this garment part.
           </Text>
 
           {partFabrics.length === 0 ? (
@@ -590,15 +757,11 @@ export default function GarmentDetailsScreen({
                 style={styles.fabricCard}
               >
                 <View style={styles.fabricInfo}>
-                  <Text
-                    style={styles.fabricName}
-                  >
+                  <Text style={styles.fabricName}>
                     {fabric.name}
                   </Text>
 
-                  <Text
-                    style={styles.fabricPrice}
-                  >
+                  <Text style={styles.fabricPrice}>
                     Price Addition: ₱
                     {Number(
                       fabric.price_addition
@@ -615,11 +778,7 @@ export default function GarmentDetailsScreen({
                     )
                   }
                 >
-                  <Text
-                    style={
-                      styles.removeFabricText
-                    }
-                  >
+                  <Text style={styles.removeFabricText}>
                     Remove
                   </Text>
                 </TouchableOpacity>
@@ -636,16 +795,11 @@ export default function GarmentDetailsScreen({
               const assigned =
                 garmentFabrics.some(
                   (assignment) =>
-                    assignment.garment_part_id ===
-                      item.id &&
-                    assignment.fabric_id ===
-                      fabric.id
+                    assignment.garment_part_id === item.id &&
+                    assignment.fabric_id === fabric.id
                 );
 
-              return (
-                fabric.available &&
-                !assigned
-              );
+              return fabric.available && !assigned;
             })
             .map((fabric) => (
               <TouchableOpacity
@@ -659,19 +813,11 @@ export default function GarmentDetailsScreen({
                 }
               >
                 <View>
-                  <Text
-                    style={
-                      styles.availableFabricName
-                    }
-                  >
+                  <Text style={styles.availableFabricName}>
                     {fabric.name}
                   </Text>
 
-                  <Text
-                    style={
-                      styles.availableFabricPrice
-                    }
-                  >
+                  <Text style={styles.availableFabricPrice}>
                     Price Addition: ₱
                     {Number(
                       fabric.price_addition
@@ -679,9 +825,7 @@ export default function GarmentDetailsScreen({
                   </Text>
                 </View>
 
-                <Text
-                  style={styles.assignText}
-                >
+                <Text style={styles.assignText}>
                   Assign
                 </Text>
               </TouchableOpacity>
@@ -716,9 +860,7 @@ export default function GarmentDetailsScreen({
             </Text>
 
             {garment.description ? (
-              <Text
-                style={styles.description}
-              >
+              <Text style={styles.description}>
                 {garment.description}
               </Text>
             ) : null}
@@ -744,24 +886,17 @@ export default function GarmentDetailsScreen({
               </Text>
 
               <TouchableOpacity
-                style={
-                  styles.addPartButton
-                }
+                style={styles.addPartButton}
                 onPress={() =>
                   navigation.navigate(
                     'AddGarmentPart',
                     {
-                      garmentId:
-                        garment.id,
+                      garmentId: garment.id,
                     }
                   )
                 }
               >
-                <Text
-                  style={
-                    styles.addPartText
-                  }
-                >
+                <Text style={styles.addPartText}>
                   + Add Part
                 </Text>
               </TouchableOpacity>
@@ -855,6 +990,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
 
+  partDetails: {
+    flex: 1,
+  },
+
   partName: {
     fontSize: 18,
     fontWeight: '700',
@@ -920,19 +1059,18 @@ const styles = StyleSheet.create({
   },
 
   designCard: {
-    flexDirection: 'row',
     borderWidth: 1,
     borderColor: '#eee',
     borderRadius: 8,
     padding: 10,
-    marginBottom: 10,
+    marginBottom: 12,
   },
 
   designImage: {
-    width: 90,
-    height: 90,
+    width: '100%',
+    height: 160,
     borderRadius: 6,
-    marginRight: 10,
+    marginBottom: 10,
   },
 
   designInfo: {
@@ -970,6 +1108,26 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
+  designFabricSection: {
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#f0dce3',
+  },
+
+  designFabricTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#b84f72',
+    marginBottom: 9,
+  },
+
+  sectionDescription: {
+    fontSize: 12,
+    color: '#888',
+    marginBottom: 10,
+  },
+
   fabricSection: {
     marginTop: 15,
     paddingTop: 15,
@@ -980,11 +1138,11 @@ const styles = StyleSheet.create({
   fabricTitle: {
     fontSize: 16,
     fontWeight: '700',
-    marginBottom: 10,
+    marginBottom: 6,
   },
 
   noFabrics: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#888',
     marginBottom: 10,
   },
@@ -995,6 +1153,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#eee',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 8,
+  },
+
+  designFabricCard: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#fff8fa',
+    borderWidth: 1,
+    borderColor: '#f0dce3',
     borderRadius: 8,
     padding: 10,
     marginBottom: 8,
@@ -1021,6 +1191,7 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     paddingVertical: 6,
     paddingHorizontal: 10,
+    marginLeft: 8,
   },
 
   removeFabricText: {
@@ -1029,9 +1200,9 @@ const styles = StyleSheet.create({
   },
 
   availableFabricTitle: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
-    marginTop: 10,
+    marginTop: 12,
     marginBottom: 8,
   },
 
@@ -1060,6 +1231,7 @@ const styles = StyleSheet.create({
   assignText: {
     color: '#d96b8a',
     fontWeight: '600',
+    marginLeft: 8,
   },
 
   noParts: {

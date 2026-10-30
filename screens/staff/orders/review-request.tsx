@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from 'react';
 
 import {
@@ -8,16 +7,17 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  Platform,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
 
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import {
-  RootStackParamList,
-} from '../../navigator';
+
+import { RootStackParamList } from '../../navigator';
 import { supabase } from '../../../supabase';
 
 type Props = NativeStackScreenProps<
@@ -46,7 +46,9 @@ export default function ReviewRequestScreen({
   const [imageError, setImageError] = useState('');
 
   const [quotedPrice, setQuotedPrice] = useState(
-    order.quoted_price != null ? String(order.quoted_price) : ''
+    order.quoted_price != null
+      ? String(order.quoted_price)
+      : ''
   );
 
   const [depositAmount, setDepositAmount] = useState(
@@ -59,13 +61,34 @@ export default function ReviewRequestScreen({
     order.quotation_note ?? ''
   );
 
+  const [estimatedCompletionDate, setEstimatedCompletionDate] =
+    useState<Date | null>(
+      order.estimated_completion_date
+        ? new Date(
+            `${order.estimated_completion_date}T12:00:00`
+          )
+        : null
+    );
+
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [declineReason, setDeclineReason] = useState('');
   const [saving, setSaving] = useState(false);
+  const [declining, setDeclining] = useState(false);
 
   const isLocked = [
     'accepted',
     'declined',
     'completed',
   ].includes(order.status);
+
+  const isBusy = saving || declining;
+
+  const editableStatuses = [
+    'submitted',
+    'under_review',
+    'quoted',
+    'quotation_sent',
+  ];
 
   const formatStatus = (status: string) =>
     status
@@ -77,6 +100,39 @@ export default function ReviewRequestScreen({
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     })}`;
+
+  const formatDate = (date: Date) =>
+    date.toLocaleDateString('en-PH', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+
+  const toDatabaseDate = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
+  };
+
+  // DateTimePicker v9.1.0 API
+    const handleDateValueChange = (
+        event: any,
+        selectedDate?: Date
+    ) => {
+        if (selectedDate) {
+            setEstimatedCompletionDate(selectedDate);
+        }
+
+        if (Platform.OS === 'android') {
+            setShowDatePicker(false);
+        }
+    };
+
+  const handleDateDismiss = () => {
+    setShowDatePicker(false);
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -122,14 +178,18 @@ export default function ReviewRequestScreen({
         if (!mounted) return;
 
         if (error || !data?.signedUrl) {
-          setImageError('The reference image could not be loaded.');
+          setImageError(
+            'The reference image could not be loaded.'
+          );
           return;
         }
 
         setImageUrl(data.signedUrl);
       } catch {
         if (mounted) {
-          setImageError('The reference image could not be loaded.');
+          setImageError(
+            'The reference image could not be loaded.'
+          );
         }
       } finally {
         if (mounted) setImageLoading(false);
@@ -144,10 +204,12 @@ export default function ReviewRequestScreen({
   }, [order.user_id, order.reference_image_url]);
 
   const sendQuotation = async () => {
-    if (isLocked) {
+    if (isLocked || isBusy) return;
+
+    if (!estimatedCompletionDate) {
       Alert.alert(
-        'Quotation Locked',
-        'This order has already been accepted, declined, or completed.'
+        'Completion Date Required',
+        'Please select an estimated completion date before sending the quotation.'
       );
       return;
     }
@@ -187,15 +249,12 @@ export default function ReviewRequestScreen({
           quoted_price: price,
           deposit_amount: deposit,
           quotation_note: quotationNote.trim() || null,
+          estimated_completion_date:
+            toDatabaseDate(estimatedCompletionDate),
           status: 'quotation_sent',
         })
         .eq('id', order.id)
-        .in('status', [
-          'submitted',
-          'under_review',
-          'quoted',
-          'quotation_sent',
-        ])
+        .in('status', editableStatuses)
         .select('id');
 
       if (error) throw error;
@@ -203,14 +262,14 @@ export default function ReviewRequestScreen({
       if (!data || data.length === 0) {
         Alert.alert(
           'Quotation Not Saved',
-          'The order status may have changed. Return to the order list and refresh.'
+          'The order status may have changed. Return to Manage Orders and refresh.'
         );
         return;
       }
 
       Alert.alert(
         'Quotation Sent',
-        'The quotation has been saved. The customer can view it in My Orders.',
+        'The quotation and estimated completion date have been saved. The customer can review the quotation in My Orders.',
         [
           {
             text: 'OK',
@@ -221,10 +280,90 @@ export default function ReviewRequestScreen({
     } catch (error: any) {
       Alert.alert(
         'Could Not Send Quotation',
-        error?.message ?? 'Please check your database permissions.'
+        error?.message ??
+          'Please check your database permissions.'
       );
     } finally {
       setSaving(false);
+    }
+  };
+
+  const declineRequest = async () => {
+    if (isLocked || isBusy) return;
+
+    const reason = declineReason.trim();
+
+    if (!reason) {
+      Alert.alert(
+        'Reason Required',
+        'Please explain why this custom order request is being declined.'
+      );
+      return;
+    }
+
+    Alert.alert(
+      'Decline Custom Order?',
+      'Are you sure you want to decline this request? The customer will be able to see the reason.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Decline Request',
+          style: 'destructive',
+          onPress: () => {
+            void confirmDecline(reason);
+          },
+        },
+      ]
+    );
+  };
+
+  const confirmDecline = async (reason: string) => {
+    if (isLocked || isBusy) return;
+
+    setDeclining(true);
+
+    try {
+      const { data, error } = await supabase
+        .from('custom_orders')
+        .update({
+          status: 'declined',
+          decline_reason: reason,
+        })
+        .eq('id', order.id)
+        .in('status', editableStatuses)
+        .select('id');
+
+      if (error) throw error;
+
+      if (!data || data.length === 0) {
+        Alert.alert(
+          'Request Not Declined',
+          'The order status may have changed. Return to Manage Orders and refresh.'
+        );
+        return;
+      }
+
+      Alert.alert(
+        'Request Declined',
+        'The request has been declined and the reason has been saved.',
+        [
+          {
+            text: 'OK',
+            onPress: () => navigation.goBack(),
+          },
+        ]
+      );
+    } catch (error: any) {
+      Alert.alert(
+        'Could Not Decline Request',
+        error?.message ??
+          'Please check your database permissions.'
+      );
+    } finally {
+      setDeclining(false);
     }
   };
 
@@ -273,11 +412,13 @@ export default function ReviewRequestScreen({
             label="Name"
             value={customerName}
           />
+
           <DetailRow
             icon="mail-outline"
             label="Email"
             value={customer?.email || 'Email not available'}
           />
+
           <DetailRow
             icon="call-outline"
             label="Contact Number"
@@ -286,10 +427,13 @@ export default function ReviewRequestScreen({
               'Contact number not provided'
             }
           />
+
           <DetailRow
             icon="calendar-outline"
             label="Date Submitted"
-            value={new Date(order.created_at).toLocaleDateString()}
+            value={new Date(
+              order.created_at
+            ).toLocaleDateString()}
           />
         </View>
 
@@ -309,14 +453,16 @@ export default function ReviewRequestScreen({
             Preferred Color
           </Text>
           <Text style={styles.description}>
-            {order.preferred_color || 'No preferred color specified.'}
+            {order.preferred_color ||
+              'No preferred color specified.'}
           </Text>
 
           <Text style={styles.fieldLabel}>
             Fabric Preference
           </Text>
           <Text style={styles.description}>
-            {order.fabric_preference || 'No fabric preference specified.'}
+            {order.fabric_preference ||
+              'No fabric preference specified.'}
           </Text>
 
           <Text style={styles.fieldLabel}>
@@ -346,7 +492,10 @@ export default function ReviewRequestScreen({
         <View style={styles.card}>
           {imageLoading ? (
             <View style={styles.imagePlaceholder}>
-              <ActivityIndicator color="#d96b8a" size="large" />
+              <ActivityIndicator
+                color="#d96b8a"
+                size="large"
+              />
               <Text style={styles.mutedText}>
                 Loading reference image...
               </Text>
@@ -358,7 +507,9 @@ export default function ReviewRequestScreen({
               resizeMode="contain"
               onError={() => {
                 setImageUrl(null);
-                setImageError('The image could not be displayed.');
+                setImageError(
+                  'The image could not be displayed.'
+                );
               }}
             />
           ) : (
@@ -369,7 +520,8 @@ export default function ReviewRequestScreen({
                 color="#c5a3ae"
               />
               <Text style={styles.mutedText}>
-                {imageError || 'No reference image available.'}
+                {imageError ||
+                  'No reference image available.'}
               </Text>
             </View>
           )}
@@ -385,39 +537,127 @@ export default function ReviewRequestScreen({
               <Text style={styles.existingQuoteLabel}>
                 Current Quotation
               </Text>
+
               <Text style={styles.existingQuoteAmount}>
                 {formatMoney(Number(order.quoted_price))}
               </Text>
+
               {order.deposit_amount != null && (
                 <Text style={styles.mutedText}>
-                  Deposit: {formatMoney(Number(order.deposit_amount))}
+                  Deposit:{' '}
+                  {formatMoney(Number(order.deposit_amount))}
+                </Text>
+              )}
+
+              {order.estimated_completion_date && (
+                <Text style={styles.mutedText}>
+                  Estimated completion:{' '}
+                  {new Date(
+                    `${order.estimated_completion_date}T12:00:00`
+                  ).toLocaleDateString()}
                 </Text>
               )}
             </View>
           )}
 
           <Text style={styles.fieldLabel}>
-            Total Price (₱)
+            Estimated Completion Date *
           </Text>
+
+          <TouchableOpacity
+            style={[
+              styles.dateButton,
+              isLocked && styles.readOnlyInput,
+            ]}
+            onPress={() => setShowDatePicker(true)}
+            disabled={isLocked || isBusy}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name="calendar-outline"
+              size={20}
+              color="#d96b8a"
+            />
+
+            <Text
+              style={[
+                styles.dateButtonText,
+                !estimatedCompletionDate &&
+                  styles.placeholderText,
+              ]}
+            >
+              {estimatedCompletionDate
+                ? formatDate(estimatedCompletionDate)
+                : 'Select estimated completion date'}
+            </Text>
+
+            {!isLocked && (
+              <Ionicons
+                name="chevron-down"
+                size={18}
+                color="#98727f"
+              />
+            )}
+          </TouchableOpacity>
+
+          {showDatePicker && (
+            <View style={styles.datePickerContainer}>
+              <DateTimePicker
+                value={estimatedCompletionDate ?? new Date()}
+                mode="date"
+                minimumDate={new Date()}
+                display="default"
+                onValueChange={handleDateValueChange}
+                onDismiss={handleDateDismiss}
+              />
+
+              <TouchableOpacity
+                style={styles.doneDateButton}
+                onPress={() => setShowDatePicker(false)}
+              >
+                <Text style={styles.doneDateText}>
+                  Done
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <Text style={styles.dateHelper}>
+            This is the date the staff expects the garment to be finished. It may differ from the customer's needed-by date.
+          </Text>
+
+          <Text style={styles.fieldLabel}>
+            Total Price (₱) *
+          </Text>
+
           <TextInput
-            style={styles.input}
+            style={[
+              styles.input,
+              isLocked && styles.readOnlyInput,
+            ]}
             value={quotedPrice}
             onChangeText={setQuotedPrice}
             placeholder="e.g. 1500"
+            placeholderTextColor="#999"
             keyboardType="decimal-pad"
-            editable={!isLocked && !saving}
+            editable={!isLocked && !isBusy}
           />
 
           <Text style={styles.fieldLabel}>
-            Required Deposit (₱)
+            Required Deposit (₱) *
           </Text>
+
           <TextInput
-            style={styles.input}
+            style={[
+              styles.input,
+              isLocked && styles.readOnlyInput,
+            ]}
             value={depositAmount}
             onChangeText={setDepositAmount}
             placeholder="e.g. 500"
+            placeholderTextColor="#999"
             keyboardType="decimal-pad"
-            editable={!isLocked && !saving}
+            editable={!isLocked && !isBusy}
           />
 
           {quotedPrice.trim() !== '' &&
@@ -425,31 +665,39 @@ export default function ReviewRequestScreen({
             Number.isFinite(Number(quotedPrice)) &&
             Number.isFinite(Number(depositAmount)) &&
             Number(quotedPrice) >= Number(depositAmount) &&
-            Number(quotedPrice) >= 0 &&
+            Number(quotedPrice) > 0 &&
             Number(depositAmount) >= 0 && (
               <View style={styles.balanceBox}>
                 <Text style={styles.balanceLabel}>
                   Remaining Balance
                 </Text>
+
                 <Text style={styles.balanceAmount}>
                   {formatMoney(
-                    Number(quotedPrice) - Number(depositAmount)
+                    Number(quotedPrice) -
+                      Number(depositAmount)
                   )}
                 </Text>
               </View>
             )}
 
           <Text style={styles.fieldLabel}>
-            Quotation Note
+            Quotation Note (Optional)
           </Text>
+
           <TextInput
-            style={[styles.input, styles.noteInput]}
+            style={[
+              styles.input,
+              styles.noteInput,
+              isLocked && styles.readOnlyInput,
+            ]}
             value={quotationNote}
             onChangeText={setQuotationNote}
-            placeholder="Explain the price, materials, or estimated completion time."
+            placeholder="Add pricing details, included alterations, or payment reminders..."
+            placeholderTextColor="#999"
             multiline
             textAlignVertical="top"
-            editable={!isLocked && !saving}
+            editable={!isLocked && !isBusy}
           />
 
           {isLocked ? (
@@ -459,8 +707,10 @@ export default function ReviewRequestScreen({
                 size={18}
                 color="#8a6470"
               />
+
               <Text style={styles.lockedText}>
-                This quotation cannot be changed because the order is already {formatStatus(order.status).toLowerCase()}.
+                This order cannot be changed because it is already{' '}
+                {formatStatus(order.status).toLowerCase()}.
               </Text>
             </View>
           ) : (
@@ -468,10 +718,11 @@ export default function ReviewRequestScreen({
               <TouchableOpacity
                 style={[
                   styles.sendButton,
-                  saving && styles.disabledButton,
+                  isBusy && styles.disabledButton,
                 ]}
                 onPress={sendQuotation}
-                disabled={saving}
+                disabled={isBusy}
+                activeOpacity={0.8}
               >
                 {saving ? (
                   <ActivityIndicator color="#fff" />
@@ -492,6 +743,65 @@ export default function ReviewRequestScreen({
               <Text style={styles.helperText}>
                 Sending a quotation does not process a payment. The customer must respond to the quotation in My Orders.
               </Text>
+
+              <View style={styles.declineDivider} />
+
+              <Text style={styles.declineHeading}>
+                Decline This Request
+              </Text>
+
+              <Text style={styles.declineDescription}>
+                If the shop cannot accommodate this order, provide a reason. The customer will be able to see it in their order details.
+              </Text>
+
+              <Text style={styles.fieldLabel}>
+                Reason for Declining *
+              </Text>
+
+              <TextInput
+                style={[
+                  styles.input,
+                  styles.noteInput,
+                  styles.declineInput,
+                ]}
+                value={declineReason}
+                onChangeText={setDeclineReason}
+                placeholder="Explain why this request cannot be accommodated..."
+                placeholderTextColor="#999"
+                multiline
+                textAlignVertical="top"
+                editable={!isBusy}
+                maxLength={1000}
+              />
+
+              <TouchableOpacity
+                style={[
+                  styles.declineButton,
+                  isBusy && styles.disabledButton,
+                ]}
+                onPress={declineRequest}
+                disabled={isBusy}
+                activeOpacity={0.8}
+              >
+                {declining ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons
+                      name="close-circle-outline"
+                      size={19}
+                      color="#fff"
+                    />
+                    <Text style={styles.declineButtonText}>
+                      Decline Request
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <Text style={styles.helperText}>
+                Declining the request is separate from the customer declining a quotation.
+              </Text>
             </>
           )}
         </View>
@@ -511,7 +821,12 @@ function DetailRow({
 }) {
   return (
     <View style={styles.detailRow}>
-      <Ionicons name={icon} size={19} color="#d96b8a" />
+      <Ionicons
+        name={icon}
+        size={19}
+        color="#d96b8a"
+      />
+
       <View style={styles.detailContent}>
         <Text style={styles.detailLabel}>{label}</Text>
         <Text style={styles.detailValue}>{value}</Text>
@@ -668,8 +983,56 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#333',
   },
+  readOnlyInput: {
+    backgroundColor: '#f7f3f4',
+    opacity: 0.8,
+  },
   noteInput: {
     minHeight: 100,
+    textAlignVertical: 'top',
+  },
+  dateButton: {
+    minHeight: 49,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e6dce0',
+    borderRadius: 10,
+    paddingHorizontal: 13,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  dateButtonText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#443940',
+  },
+  placeholderText: {
+    color: '#999',
+  },
+  datePickerContainer: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#f0d5df',
+  },
+  doneDateButton: {
+    alignSelf: 'flex-end',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  doneDateText: {
+    color: '#b44e70',
+    fontWeight: 'bold',
+  },
+  dateHelper: {
+    fontSize: 11,
+    color: '#888',
+    lineHeight: 17,
+    marginTop: 7,
   },
   balanceBox: {
     flexDirection: 'row',
@@ -713,6 +1076,42 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 18,
     marginTop: 12,
+  },
+  declineDivider: {
+    height: 1,
+    backgroundColor: '#f0e6e9',
+    marginTop: 25,
+    marginBottom: 20,
+  },
+  declineHeading: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#a33c49',
+  },
+  declineDescription: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#888',
+    marginTop: 6,
+  },
+  declineInput: {
+    borderColor: '#e8cbd0',
+    backgroundColor: '#fffdfd',
+  },
+  declineButton: {
+    backgroundColor: '#b94c58',
+    borderRadius: 11,
+    padding: 15,
+    marginTop: 18,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 9,
+  },
+  declineButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
   },
   lockedNotice: {
     flexDirection: 'row',

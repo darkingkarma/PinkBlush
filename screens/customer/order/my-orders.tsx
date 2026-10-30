@@ -1,6 +1,4 @@
-
 import { useCallback, useEffect, useState } from 'react';
-
 import {
   ActivityIndicator,
   Alert,
@@ -12,21 +10,23 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-
 import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '../../../supabase';
+import { useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
+import { supabase } from '../../../supabase';
+import { RootStackParamList } from '../../navigator';
+
+type Navigation = NativeStackNavigationProp<RootStackParamList>;
 type OrderType = 'all' | 'catalog' | 'custom';
 
 type CustomOrder = {
   id: string;
   reference_image_url: string | null;
   garment_description: string;
-  special_instructions: string | null;
   status: string;
   quoted_price: number | string | null;
-  deposit_amount: number | string | null;
-  quotation_note: string | null;
+  estimated_completion_date: string | null;
   created_at: string;
   signedImageUrl?: string | null;
 };
@@ -42,6 +42,7 @@ type CatalogOrderItem = {
   unit_price: number | string;
   subtotal: number | string;
   garmentName?: string;
+  garmentImageUrl?: string | null;
   partName?: string;
   designName?: string;
   designImageUrl?: string | null;
@@ -54,11 +55,18 @@ type CatalogOrder = {
   total_amount: number | string;
   created_at: string;
   items: CatalogOrderItem[];
+  depositPaymentId?: string | null;
 };
 
 type DisplayOrder =
   | { type: 'custom'; data: CustomOrder }
   | { type: 'catalog'; data: CatalogOrder };
+
+type GarmentInfo = {
+  id: string;
+  name: string;
+  image_url: string | null;
+};
 
 type DesignInfo = {
   id: string;
@@ -66,105 +74,38 @@ type DesignInfo = {
   image_url: string | null;
 };
 
+const PINK = '#D96B8A';
+const DARK_PINK = '#B84470';
+
 const STATUS_INFO: Record<
   string,
   { label: string; color: string; background: string }
 > = {
-  submitted: {
-    label: 'Request Submitted',
-    color: '#946200',
-    background: '#FFF3CD',
-  },
-  under_review: {
-    label: 'Under Review',
-    color: '#2456A6',
-    background: '#E7F0FF',
-  },
-  quoted: {
-    label: 'Quotation Ready',
-    color: '#7A3DB8',
-    background: '#F2E7FF',
-  },
-  quotation_sent: {
-    label: 'Quotation Ready',
-    color: '#7A3DB8',
-    background: '#F2E7FF',
-  },
-  accepted: {
-    label: 'Quotation Accepted',
-    color: '#237A4B',
-    background: '#E1F6E9',
-  },
-  measurements_pending: {
-    label: 'Measurements Needed',
-    color: '#2456A6',
-    background: '#E7F0FF',
-  },
-  awaiting_deposit: {
-    label: 'Awaiting Deposit',
-    color: '#946200',
-    background: '#FFF3CD',
-  },
-  deposit_paid: {
-    label: 'Deposit Paid',
-    color: '#237A4B',
-    background: '#E1F6E9',
-  },
-  pending: {
-    label: 'Pending Review',
-    color: '#946200',
-    background: '#FFF3CD',
-  },
-  in_production: {
-    label: 'In Production',
-    color: '#7A3DB8',
-    background: '#F2E7FF',
-  },
-  ready_for_fitting: {
-    label: 'Ready for Fitting',
-    color: '#2456A6',
-    background: '#E7F0FF',
-  },
-  ready_for_release: {
-    label: 'Ready for Pickup',
-    color: '#237A4B',
-    background: '#E1F6E9',
-  },
-  completed: {
-    label: 'Completed',
-    color: '#237A4B',
-    background: '#E1F6E9',
-  },
-  declined: {
-    label: 'Quotation Declined',
-    color: '#B42335',
-    background: '#FCE8EA',
-  },
-  cancelled: {
-    label: 'Cancelled',
-    color: '#666666',
-    background: '#EEEEEE',
-  },
+  submitted: { label: 'Request Submitted', color: '#946200', background: '#FFF3CD' },
+  under_review: { label: 'Under Review', color: '#2456A6', background: '#E7F0FF' },
+  quoted: { label: 'Quotation Ready', color: '#7A3DB8', background: '#F2E7FF' },
+  quotation_sent: { label: 'Quotation Ready', color: '#7A3DB8', background: '#F2E7FF' },
+  accepted: { label: 'Quotation Accepted', color: '#237A4B', background: '#E1F6E9' },
+  measurements_pending: { label: 'Measurements Needed', color: '#2456A6', background: '#E7F0FF' },
+  awaiting_deposit: { label: 'Awaiting Deposit', color: '#946200', background: '#FFF3CD' },
+  deposit_paid: { label: 'Deposit Paid', color: '#237A4B', background: '#E1F6E9' },
+  pending: { label: 'Pending Review', color: '#946200', background: '#FFF3CD' },
+  in_production: { label: 'In Production', color: '#7A3DB8', background: '#F2E7FF' },
+  ready_for_fitting: { label: 'Ready for Fitting', color: '#2456A6', background: '#E7F0FF' },
+  ready_for_release: { label: 'Ready for Pickup', color: '#237A4B', background: '#E1F6E9' },
+  completed: { label: 'Completed', color: '#237A4B', background: '#E1F6E9' },
+  declined: { label: 'Request Declined', color: '#B42335', background: '#FCE8EA' },
+  cancelled: { label: 'Cancelled', color: '#666666', background: '#EEEEEE' },
 };
 
-const formatStatus = (status: string) =>
-  status
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+const formatDate = (value: string | null | undefined) => {
+  if (!value) return 'Not specified';
 
-const getStatusInfo = (status: string) =>
-  STATUS_INFO[status.toLowerCase()] || {
-    label: formatStatus(status),
-    color: '#555555',
-    background: '#EEEEEE',
-  };
+  const date = new Date(
+    /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T12:00:00` : value,
+  );
 
-const formatDate = (dateString: string) => {
-  const date = new Date(dateString);
-
-  if (Number.isNaN(date.getTime())) {
-    return 'Date unavailable';
-  }
+  if (Number.isNaN(date.getTime())) return 'Date unavailable';
 
   return date.toLocaleDateString('en-PH', {
     year: 'numeric',
@@ -173,18 +114,11 @@ const formatDate = (dateString: string) => {
   });
 };
 
-const formatPrice = (
-  amount: number | string | null | undefined,
-) => {
-  if (amount === null || amount === undefined || amount === '') {
-    return null;
-  }
+const formatPrice = (amount: number | string | null | undefined) => {
+  if (amount === null || amount === undefined || amount === '') return null;
 
   const value = Number(amount);
-
-  if (!Number.isFinite(value)) {
-    return null;
-  }
+  if (!Number.isFinite(value)) return null;
 
   return `₱${value.toLocaleString('en-PH', {
     minimumFractionDigits: 2,
@@ -192,14 +126,31 @@ const formatPrice = (
   })}`;
 };
 
+const getStatusInfo = (status: string) =>
+  STATUS_INFO[status.toLowerCase()] || {
+    label: status.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()),
+    color: '#555555',
+    background: '#EEEEEE',
+  };
+
+const getUniqueIds = (values: (string | null | undefined)[]) => [
+  ...new Set(values.filter((value): value is string => Boolean(value))),
+];
+
 export default function MyOrdersScreen() {
+  const navigation = useNavigation<Navigation>();
+
   const [orders, setOrders] = useState<DisplayOrder[]>([]);
   const [filter, setFilter] = useState<OrderType>('all');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [savingOrderId, setSavingOrderId] = useState<string | null>(
-    null,
-  );
+
+  const openOrderDetails = (
+    orderId: string,
+    orderType: 'custom' | 'catalog',
+  ) => {
+    navigation.navigate('OrderDetails', { orderId, orderType });
+  };
 
   const fetchOrders = useCallback(async () => {
     try {
@@ -222,7 +173,7 @@ export default function MyOrdersScreen() {
         supabase
           .from('custom_orders')
           .select(
-            'id, reference_image_url, garment_description, special_instructions, status, quoted_price, deposit_amount, quotation_note, created_at',
+            'id, reference_image_url, garment_description, status, quoted_price, estimated_completion_date, created_at',
           )
           .eq('user_id', user.id)
           .order('created_at', { ascending: false }),
@@ -238,14 +189,9 @@ export default function MyOrdersScreen() {
       if (catalogError) throw catalogError;
 
       const customRows = (customData || []) as CustomOrder[];
-
-      const catalogRows = (catalogData || []) as Omit<
-        CatalogOrder,
-        'items'
-      >[];
+      const catalogRows = (catalogData || []) as Omit<CatalogOrder, 'items' | 'depositPaymentId'>[];
 
       const catalogIds = catalogRows.map((order) => order.id);
-
       let rawItems: CatalogOrderItem[] = [];
 
       if (catalogIds.length > 0) {
@@ -257,35 +203,13 @@ export default function MyOrdersScreen() {
           .in('order_id', catalogIds);
 
         if (error) throw error;
-
         rawItems = (data || []) as CatalogOrderItem[];
       }
 
-      const uniqueIds = (
-        values: (string | null | undefined)[],
-      ) => [
-        ...new Set(
-          values.filter(
-            (value): value is string => !!value,
-          ),
-        ),
-      ];
-
-      const garmentIds = uniqueIds(
-        rawItems.map((item) => item.garment_id),
-      );
-
-      const partIds = uniqueIds(
-        rawItems.map((item) => item.garment_part_id),
-      );
-
-      const designIds = uniqueIds(
-        rawItems.map((item) => item.design_id),
-      );
-
-      const fabricIds = uniqueIds(
-        rawItems.map((item) => item.fabric_id),
-      );
+      const garmentIds = getUniqueIds(rawItems.map((item) => item.garment_id));
+      const partIds = getUniqueIds(rawItems.map((item) => item.garment_part_id));
+      const designIds = getUniqueIds(rawItems.map((item) => item.design_id));
+      const fabricIds = getUniqueIds(rawItems.map((item) => item.fabric_id));
 
       const fetchNames = async (
         table: string,
@@ -299,51 +223,50 @@ export default function MyOrdersScreen() {
           .in('id', ids);
 
         if (error) {
-          console.warn(
-            `Unable to load ${table} names:`,
-            error.message,
-          );
+          console.warn(`Unable to load ${table} names:`, error.message);
           return {};
         }
 
         return Object.fromEntries(
-          (data || []).map(
-            (row: { id: string; name: string }) => [
-              row.id,
-              row.name,
-            ],
-          ),
+          (data || []).map((row: { id: string; name: string }) => [
+            row.id,
+            row.name,
+          ]),
         );
       };
 
-      const fetchDesigns = async (
-        ids: string[],
-      ): Promise<Record<string, DesignInfo>> => {
-        if (ids.length === 0) return {};
+      const fetchGarments = async (): Promise<Record<string, GarmentInfo>> => {
+        if (garmentIds.length === 0) return {};
+
+        const { data, error } = await supabase
+          .from('garments')
+          .select('id, name, image_url')
+          .in('id', garmentIds);
+
+        if (error) {
+          console.warn('Unable to load garment images:', error.message);
+          return {};
+        }
+
+        return Object.fromEntries(
+          ((data || []) as GarmentInfo[]).map((garment) => [
+            garment.id,
+            garment,
+          ]),
+        );
+      };
+
+      const fetchDesigns = async (): Promise<Record<string, DesignInfo>> => {
+        if (designIds.length === 0) return {};
 
         const { data, error } = await supabase
           .from('designs')
           .select('id, name, image_url')
-          .in('id', ids);
+          .in('id', designIds);
 
         if (error) {
-          console.warn(
-            'Unable to load design images:',
-            error.message,
-          );
-
-          const names = await fetchNames('designs', ids);
-
-          return Object.fromEntries(
-            Object.entries(names).map(([id, name]) => [
-              id,
-              {
-                id,
-                name,
-                image_url: null,
-              },
-            ]),
-          );
+          console.warn('Unable to load design images:', error.message);
+          return {};
         }
 
         return Object.fromEntries(
@@ -354,69 +277,73 @@ export default function MyOrdersScreen() {
         );
       };
 
-      const [
-        garmentNames,
-        partNames,
-        designs,
-        fabricNames,
-      ] = await Promise.all([
-        fetchNames('garments', garmentIds),
+      const [garments, partNames, designs, fabricNames] = await Promise.all([
+        fetchGarments(),
         fetchNames('garment_parts', partIds),
-        fetchDesigns(designIds),
+        fetchDesigns(),
         fetchNames('fabrics', fabricIds),
       ]);
 
-      const itemsWithNames: CatalogOrderItem[] = rawItems.map(
-        (item) => {
-          const design = item.design_id
-            ? designs[item.design_id]
-            : undefined;
+      const itemsWithNames = rawItems.map((item) => {
+        const garment = garments[item.garment_id];
+        const design = item.design_id ? designs[item.design_id] : undefined;
 
-          return {
-            ...item,
-            garmentName: garmentNames[item.garment_id],
-            partName: partNames[item.garment_part_id],
-            designName: design?.name,
-            designImageUrl: design?.image_url || null,
-            fabricName: item.fabric_id
-              ? fabricNames[item.fabric_id]
-              : undefined,
-          };
-        },
-      );
+        return {
+          ...item,
+          garmentName: garment?.name,
+          garmentImageUrl: garment?.image_url || null,
+          partName: partNames[item.garment_part_id],
+          designName: design?.name,
+          designImageUrl: design?.image_url || null,
+          fabricName: item.fabric_id ? fabricNames[item.fabric_id] : undefined,
+        };
+      });
 
-      const catalogOrders: CatalogOrder[] = catalogRows.map(
-        (order) => ({
-          ...order,
-          items: itemsWithNames.filter(
-            (item) => item.order_id === order.id,
-          ),
-        }),
-      );
+      // Find existing paid deposit records. Do not create new payments here.
+      const depositPaymentIds: Record<string, string> = {};
 
-      // Generate signed URLs for private custom-order images.
+      if (catalogIds.length > 0) {
+        const { data: paymentRows, error: paymentError } = await supabase
+          .from('payments')
+          .select('id, order_id, payment_type, status, created_at')
+          .in('order_id', catalogIds)
+          .eq('payment_type', 'deposit')
+          .eq('status', 'paid')
+          .order('created_at', { ascending: false });
+
+        if (paymentError) {
+          console.warn(
+            'Unable to load deposit payments:',
+            paymentError.message,
+          );
+        } else {
+          for (const payment of paymentRows || []) {
+            if (!depositPaymentIds[payment.order_id]) {
+              depositPaymentIds[payment.order_id] = payment.id;
+            }
+          }
+        }
+      }
+
+      const catalogOrders: CatalogOrder[] = catalogRows.map((order) => ({
+        ...order,
+        items: itemsWithNames.filter((item) => item.order_id === order.id),
+        depositPaymentId: depositPaymentIds[order.id] || null,
+      }));
+
       const customOrdersWithImages = await Promise.all(
         customRows.map(async (order) => {
           const storedValue = order.reference_image_url?.trim();
 
-          if (!storedValue) {
-            return {
-              ...order,
-              signedImageUrl: null,
-            };
-          }
+          if (!storedValue) return { ...order, signedImageUrl: null };
 
           try {
             let imagePath = storedValue;
 
-            if (
-              imagePath.startsWith('http://') ||
-              imagePath.startsWith('https://')
-            ) {
+            if (/^https?:\/\//i.test(imagePath)) {
               const parsedUrl = new URL(imagePath);
               const marker = '/storage/v1/object/';
-              const markerIndex =
-                parsedUrl.pathname.indexOf(marker);
+              const markerIndex = parsedUrl.pathname.indexOf(marker);
 
               if (markerIndex !== -1) {
                 let storagePath = parsedUrl.pathname.slice(
@@ -430,60 +357,31 @@ export default function MyOrdersScreen() {
 
                 const bucketPrefix = 'custom-order-images/';
 
-                if (storagePath.startsWith(bucketPrefix)) {
-                  imagePath = storagePath.slice(
-                    bucketPrefix.length,
-                  );
-                } else {
-                  imagePath = storagePath;
-                }
+                imagePath = storagePath.startsWith(bucketPrefix)
+                  ? storagePath.slice(bucketPrefix.length)
+                  : storagePath;
 
                 imagePath = decodeURIComponent(imagePath);
               } else {
-                return {
-                  ...order,
-                  signedImageUrl: imagePath,
-                };
+                return { ...order, signedImageUrl: imagePath };
               }
             }
 
-            imagePath = imagePath.replace(
-              /^\/?custom-order-images\//,
-              '',
-            );
+            imagePath = imagePath.replace(/^\/?custom-order-images\//, '');
 
             const { data, error } = await supabase.storage
               .from('custom-order-images')
               .createSignedUrl(imagePath, 60 * 60);
 
             if (error) {
-              console.error(
-                `Custom order image error (${order.id}):`,
-                error.message,
-                'Path:',
-                imagePath,
-              );
-
-              return {
-                ...order,
-                signedImageUrl: null,
-              };
+              console.warn(`Image unavailable for ${order.id}:`, error.message);
+              return { ...order, signedImageUrl: null };
             }
 
-            return {
-              ...order,
-              signedImageUrl: data.signedUrl,
-            };
+            return { ...order, signedImageUrl: data.signedUrl };
           } catch (error: any) {
-            console.error(
-              `Unable to process image for custom order ${order.id}:`,
-              error?.message || error,
-            );
-
-            return {
-              ...order,
-              signedImageUrl: null,
-            };
+            console.warn('Unable to process custom order image:', error?.message);
+            return { ...order, signedImageUrl: null };
           }
         }),
       );
@@ -508,389 +406,237 @@ export default function MyOrdersScreen() {
       setOrders(combined);
     } catch (error: any) {
       console.error('My Orders error:', error);
-
       Alert.alert(
         'Unable to load orders',
-        error?.message ||
-          'Please check your connection and try again.',
+        error?.message || 'Please check your connection and try again.',
       );
     }
   }, []);
 
-  const respondToQuotation = (
-    order: CustomOrder,
-    decision: 'accepted' | 'declined',
-  ) => {
-    const isAccepting = decision === 'accepted';
-
-    Alert.alert(
-      isAccepting ? 'Accept Quotation?' : 'Decline Quotation?',
-      isAccepting
-        ? 'Do you agree to the quoted price and required deposit?'
-        : 'Are you sure you want to decline this quotation?',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: isAccepting ? 'Accept' : 'Decline',
-          style: isAccepting ? 'default' : 'destructive',
-          onPress: async () => {
-            setSavingOrderId(order.id);
-
-            try {
-              const {
-                data: { user },
-                error: userError,
-              } = await supabase.auth.getUser();
-
-              if (userError) throw userError;
-
-              if (!user) {
-                Alert.alert(
-                  'Login Required',
-                  'Please log in again.',
-                );
-                return;
-              }
-
-              const { data, error } = await supabase
-                .from('custom_orders')
-                .update({ status: decision })
-                .eq('id', order.id)
-                .eq('user_id', user.id)
-                .in('status', ['quoted', 'quotation_sent'])
-                .select('id, status')
-                .maybeSingle();
-
-              if (error) throw error;
-
-              if (!data) {
-                Alert.alert(
-                  'Unable to Update',
-                  'This quotation may already have been answered, or your account does not have permission to update it. Refresh your orders and try again.',
-                );
-
-                await fetchOrders();
-                return;
-              }
-
-              await fetchOrders();
-
-              Alert.alert(
-                isAccepting
-                  ? 'Quotation Accepted'
-                  : 'Quotation Declined',
-                isAccepting
-                  ? 'You accepted the quotation. Please follow the next instructions for your measurements and deposit.'
-                  : 'You declined the quotation. Contact staff if you want to discuss a different quotation.',
-              );
-            } catch (error: any) {
-              Alert.alert(
-                'Update Failed',
-                error?.message || 'Please try again.',
-              );
-            } finally {
-              setSavingOrderId(null);
-            }
-          },
-        },
-      ],
-    );
-  };
-
   useEffect(() => {
     const load = async () => {
       setLoading(true);
-      await fetchOrders();
-      setLoading(false);
+      try {
+        await fetchOrders();
+      } finally {
+        setLoading(false);
+      }
     };
 
-    load();
+    void load();
   }, [fetchOrders]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await fetchOrders();
-    setRefreshing(false);
+    try {
+      await fetchOrders();
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const visibleOrders = orders.filter(
     (order) => filter === 'all' || order.type === filter,
   );
 
-  const renderCustomOrder = (order: CustomOrder) => (
-    <>
-      <Text style={styles.sectionHeading}>Reference Image</Text>
+  const renderCustomOrder = (order: CustomOrder) => {
+    const status = order.status.toLowerCase();
+    const quotedPrice = Number(order.quoted_price);
 
-      {order.signedImageUrl ? (
-        <Image
-          source={{ uri: order.signedImageUrl }}
-          style={styles.referenceImage}
-          resizeMode="cover"
-        />
-      ) : (
-        <View style={styles.imagePlaceholder}>
-          <Ionicons
-            name="image-outline"
-            size={38}
-            color="#D96B8A"
-          />
-          <Text style={styles.placeholderText}>
-            {order.reference_image_url
-              ? 'Reference image unavailable'
-              : 'No reference image uploaded'}
-          </Text>
-        </View>
-      )}
+    const hasQuote =
+      order.quoted_price !== null &&
+      order.quoted_price !== '' &&
+      Number.isFinite(quotedPrice);
 
-      <Text style={styles.sectionLabel}>Garment Description</Text>
+    const canReviewQuotation =
+      ['quoted', 'quotation_sent'].includes(status) && hasQuote;
 
-      <Text style={styles.description}>
-        {order.garment_description}
-      </Text>
+    return (
+      <>
+        <View style={styles.productRow}>
+          <View style={styles.productInfo}>
+            <Text style={styles.orderDescription} numberOfLines={3}>
+              {order.garment_description || 'Custom garment request'}
+            </Text>
 
-      {order.special_instructions ? (
-        <View style={styles.noteBox}>
-          <Text style={styles.smallLabel}>
-            Special Instructions
-          </Text>
-          <Text style={styles.noteText}>
-            {order.special_instructions}
-          </Text>
-        </View>
-      ) : null}
+            <Text style={styles.mutedText}>
+              Submitted {formatDate(order.created_at)}
+            </Text>
 
-      <View style={styles.dateRow}>
-        <Text style={styles.smallLabel}>Date submitted</Text>
-        <Text style={styles.dateText}>
-          {formatDate(order.created_at)}
-        </Text>
-      </View>
-
-      <View style={styles.divider} />
-
-      <Text style={styles.sectionHeading}>Quotation Details</Text>
-
-      {formatPrice(order.quoted_price) ? (
-        <View style={styles.priceRow}>
-          <Text style={styles.priceLabel}>Quoted price</Text>
-          <Text style={styles.priceValue}>
-            {formatPrice(order.quoted_price)}
-          </Text>
-        </View>
-      ) : (
-        <Text style={styles.helperText}>
-          Your quotation is not available yet. Staff will review
-          your request and prepare a quotation.
-        </Text>
-      )}
-
-      {formatPrice(order.deposit_amount) ? (
-        <View style={styles.priceRow}>
-          <Text style={styles.priceLabel}>Required deposit</Text>
-          <Text style={styles.depositValue}>
-            {formatPrice(order.deposit_amount)}
-          </Text>
-        </View>
-      ) : null}
-
-      {order.quotation_note ? (
-        <View style={styles.noteBox}>
-          <Text style={styles.smallLabel}>Note from staff</Text>
-          <Text style={styles.noteText}>
-            {order.quotation_note}
-          </Text>
-        </View>
-      ) : null}
-
-      {['quoted', 'quotation_sent'].includes(
-        order.status.toLowerCase(),
-      ) && formatPrice(order.quoted_price) ? (
-        <View style={styles.quotationActions}>
-          <Text style={styles.nextStep}>
-            Review the quoted price and required deposit. Accept
-            if you agree, or decline if you do not.
-          </Text>
-
-          <TouchableOpacity
-            style={[
-              styles.acceptButton,
-              savingOrderId !== null && styles.disabledButton,
-            ]}
-            onPress={() => respondToQuotation(order, 'accepted')}
-            disabled={savingOrderId !== null}
-          >
-            {savingOrderId === order.id ? (
-              <ActivityIndicator color="#fff" />
+            {hasQuote ? (
+              <Text style={styles.priceText}>
+                {formatPrice(order.quoted_price)}
+              </Text>
             ) : (
-              <>
-                <Ionicons
-                  name="checkmark-circle-outline"
-                  size={20}
-                  color="#fff"
-                />
-                <Text style={styles.actionButtonText}>
-                  Accept Quotation
-                </Text>
-              </>
+              <Text style={styles.pendingPrice}>Waiting for quotation</Text>
             )}
-          </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[
-              styles.declineButton,
-              savingOrderId !== null && styles.disabledButton,
-            ]}
-            onPress={() => respondToQuotation(order, 'declined')}
-            disabled={savingOrderId !== null}
-          >
-            <Ionicons
-              name="close-circle-outline"
-              size={20}
-              color="#B42335"
-            />
-            <Text style={styles.declineButtonText}>
-              Decline Quotation
-            </Text>
-          </TouchableOpacity>
-        </View>
-      ) : null}
-
-      {order.status.toLowerCase() === 'accepted' ? (
-        <Text style={styles.nextStep}>
-          You accepted the quotation. Please coordinate with staff
-          regarding measurements and the required deposit before
-          production begins.
-        </Text>
-      ) : null}
-
-      {order.status.toLowerCase() === 'declined' ? (
-        <Text style={styles.declinedMessage}>
-          You declined this quotation. Please contact staff if you
-          would like to discuss another quotation.
-        </Text>
-      ) : null}
-    </>
-  );
-
-  const renderCatalogOrder = (order: CatalogOrder) => (
-    <>
-      <View style={styles.dateRow}>
-        <Text style={styles.smallLabel}>Date ordered</Text>
-        <Text style={styles.dateText}>
-          {formatDate(order.created_at)}
-        </Text>
-      </View>
-
-      <View style={styles.divider} />
-
-      <Text style={styles.sectionHeading}>Garment Details</Text>
-
-      {order.items.length === 0 ? (
-        <Text style={styles.helperText}>
-          No item details are available for this order.
-        </Text>
-      ) : (
-        order.items.map((item, index) => (
-          <View
-            key={item.id || `${order.id}-${index}`}
-            style={styles.itemBox}
-          >
-            <Text style={styles.itemTitle}>
-              {item.garmentName || 'Garment'}
-            </Text>
-
-            <Text style={styles.itemDetail}>
-              Part: {item.partName || 'Part details unavailable'}
-            </Text>
-
-            <View style={styles.designSection}>
-              <Text style={styles.designHeading}>
-                Selected Design
-              </Text>
-
-              {item.designImageUrl ? (
-                <Image
-                  source={{ uri: item.designImageUrl }}
-                  style={styles.designImage}
-                  resizeMode="cover"
-                />
-              ) : (
-                <View style={styles.designPlaceholder}>
-                  <Ionicons
-                    name="shirt-outline"
-                    size={32}
-                    color="#D96B8A"
-                  />
-                  <Text style={styles.placeholderText}>
-                    No design image available
-                  </Text>
-                </View>
-              )}
-
-              <Text style={styles.designName}>
-                {item.designName || 'Not specified'}
-              </Text>
-            </View>
-
-            <Text style={styles.itemDetail}>
-              Fabric: {item.fabricName || 'Not specified'}
-            </Text>
-
-            <View style={styles.priceRow}>
-              <Text style={styles.priceLabel}>
-                Quantity: {item.quantity}
-              </Text>
-              <Text style={styles.priceLabel}>
-                Unit: {formatPrice(item.unit_price) || '—'}
-              </Text>
-            </View>
-
-            <View style={styles.priceRow}>
-              <Text style={styles.priceLabel}>Subtotal</Text>
-              <Text style={styles.priceValue}>
-                {formatPrice(item.subtotal) || '—'}
-              </Text>
-            </View>
+            {order.estimated_completion_date &&
+            !['declined', 'cancelled'].includes(status) ? (
+              <View style={styles.completionInline}>
+                <Ionicons name="calendar-outline" size={14} color="#237A4B" />
+                <Text style={styles.completionInlineText}>
+                  Due {formatDate(order.estimated_completion_date)}
+                </Text>
+              </View>
+            ) : null}
           </View>
-        ))
-      )}
 
-      <View style={styles.totalBox}>
-        <Text style={styles.totalLabel}>Order Total</Text>
-        <Text style={styles.totalValue}>
-          {formatPrice(order.total_amount) || '—'}
-        </Text>
-      </View>
+          <View style={styles.productImageContainer}>
+            {order.signedImageUrl ? (
+              <Image
+                source={{ uri: order.signedImageUrl }}
+                style={styles.productImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={styles.productImagePlaceholder}>
+                <Ionicons name="image-outline" size={27} color={PINK} />
+                <Text style={styles.smallPlaceholderText}>
+                  {order.reference_image_url ? 'Unavailable' : 'No image'}
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
 
-      <Text style={styles.helperText}>
-        Keep your order reference for inquiries. Payment and
-        production updates will appear here when your order status
-        is updated.
-      </Text>
-    </>
-  );
+        {canReviewQuotation ? (
+          <TouchableOpacity
+            style={styles.quotationButton}
+            onPress={() =>
+              navigation.navigate('ReviewQuotation', { orderId: order.id })
+            }
+            activeOpacity={0.8}
+          >
+            <Ionicons name="document-text-outline" size={18} color="#FFFFFF" />
+            <Text style={styles.primaryButtonText}>Review Quotation</Text>
+            <Ionicons name="chevron-forward" size={18} color="#FFFFFF" />
+          </TouchableOpacity>
+        ) : null}
+
+        <TouchableOpacity
+          style={styles.detailsButton}
+          onPress={() => openOrderDetails(order.id, 'custom')}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="eye-outline" size={18} color={PINK} />
+          <Text style={styles.detailsButtonText}>View Order Details</Text>
+          <Ionicons name="chevron-forward" size={18} color={PINK} />
+        </TouchableOpacity>
+      </>
+    );
+  };
+
+  const renderCatalogOrder = (order: CatalogOrder) => {
+    const firstItem = order.items[0];
+
+    return (
+      <>
+        <View style={styles.productRow}>
+          <View style={styles.productInfo}>
+            <Text style={styles.orderDescription} numberOfLines={2}>
+              {firstItem?.garmentName || 'Catalog Order'}
+            </Text>
+
+            {firstItem?.designName ? (
+              <Text style={styles.itemSubtitle} numberOfLines={2}>
+                Design: {firstItem.designName}
+              </Text>
+            ) : null}
+
+            {firstItem?.partName ? (
+              <Text style={styles.itemSubtitle} numberOfLines={1}>
+                Part: {firstItem.partName}
+              </Text>
+            ) : null}
+
+            <Text style={styles.itemSubtitle}>
+              {order.items.length} {order.items.length === 1 ? 'item' : 'items'}
+              {firstItem?.quantity ? ` · Qty ${firstItem.quantity}` : ''}
+            </Text>
+
+            {firstItem?.fabricName ? (
+              <Text style={styles.itemSubtitle} numberOfLines={1}>
+                Fabric: {firstItem.fabricName}
+              </Text>
+            ) : null}
+
+            <Text style={styles.mutedText}>
+              Ordered {formatDate(order.created_at)}
+            </Text>
+
+            <Text style={styles.priceText}>
+              {formatPrice(order.total_amount) || '—'}
+            </Text>
+          </View>
+
+          <View style={styles.productImageContainer}>
+            {firstItem?.garmentImageUrl ? (
+              <Image
+                source={{ uri: firstItem.garmentImageUrl }}
+                style={styles.productImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={styles.productImagePlaceholder}>
+                <Ionicons name="shirt-outline" size={36} color={PINK} />
+                <Text style={styles.smallPlaceholderText}>
+                  {firstItem?.garmentName || 'Garment'}
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        {order.items.length > 1 ? (
+          <Text style={styles.moreItemsText}>
+            + {order.items.length - 1} more{' '}
+            {order.items.length - 1 === 1 ? 'item' : 'items'} in this order
+          </Text>
+        ) : null}
+
+        <TouchableOpacity
+          style={styles.detailsButton}
+          onPress={() => openOrderDetails(order.id, 'catalog')}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="eye-outline" size={18} color={PINK} />
+          <Text style={styles.detailsButtonText}>View Order Details</Text>
+          <Ionicons name="chevron-forward" size={18} color={PINK} />
+        </TouchableOpacity>
+
+        {order.depositPaymentId ? (
+          <TouchableOpacity
+            style={styles.receiptButton}
+            onPress={() =>
+              navigation.navigate('Receipt', {
+                orderId: order.id,
+                paymentId: order.depositPaymentId!,
+                orderType: 'catalog',
+              })
+            }
+            activeOpacity={0.8}
+          >
+            <Ionicons name="receipt-outline" size={18} color="#FFFFFF" />
+            <Text style={styles.receiptButtonText}>View Receipt</Text>
+            <Ionicons name="chevron-forward" size={18} color="#FFFFFF" />
+          </TouchableOpacity>
+        ) : null}
+      </>
+    );
+  };
 
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#D96B8A" />
-        <Text style={styles.loadingText}>
-          Loading your orders...
-        </Text>
+        <ActivityIndicator size="large" color={PINK} />
+        <Text style={styles.mutedText}>Loading your orders...</Text>
       </View>
     );
   }
 
-  const catalogCount = orders.filter(
-    (order) => order.type === 'catalog',
-  ).length;
-
-  const customCount = orders.filter(
-    (order) => order.type === 'custom',
-  ).length;
+  const catalogCount = orders.filter((order) => order.type === 'catalog').length;
+  const customCount = orders.filter((order) => order.type === 'custom').length;
 
   return (
     <ScrollView
@@ -900,41 +646,39 @@ export default function MyOrdersScreen() {
         <RefreshControl
           refreshing={refreshing}
           onRefresh={onRefresh}
-          tintColor="#D96B8A"
-          colors={['#D96B8A']}
+          tintColor={PINK}
+          colors={[PINK]}
         />
       }
     >
       <Text style={styles.heading}>My Orders</Text>
-
       <Text style={styles.subtitle}>
-        Track your catalog purchases and custom garment requests
-        in one place.
+        Track your orders and review your quotations.
       </Text>
 
-      <View style={styles.summaryRow}>
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryNumber}>{orders.length}</Text>
-          <Text style={styles.summaryLabel}>All Orders</Text>
+      <View style={styles.countRow}>
+        <View style={styles.countCard}>
+          <Text style={styles.countNumber}>{orders.length}</Text>
+          <Text style={styles.countLabel}>All Orders</Text>
         </View>
-
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryNumber}>{catalogCount}</Text>
-          <Text style={styles.summaryLabel}>Catalog</Text>
+        <View style={styles.countCard}>
+          <Text style={styles.countNumber}>{catalogCount}</Text>
+          <Text style={styles.countLabel}>Catalog</Text>
         </View>
-
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryNumber}>{customCount}</Text>
-          <Text style={styles.summaryLabel}>Custom</Text>
+        <View style={styles.countCard}>
+          <Text style={styles.countNumber}>{customCount}</Text>
+          <Text style={styles.countLabel}>Custom</Text>
         </View>
       </View>
 
       <View style={styles.filterRow}>
-        {([
-          { key: 'all', label: 'All' },
-          { key: 'catalog', label: 'Catalog' },
-          { key: 'custom', label: 'Custom' },
-        ] as const).map((item) => (
+        {(
+          [
+            { key: 'all', label: 'All Orders' },
+            { key: 'catalog', label: 'Catalog' },
+            { key: 'custom', label: 'Custom' },
+          ] as const
+        ).map((item) => (
           <TouchableOpacity
             key={item.key}
             style={[
@@ -942,6 +686,7 @@ export default function MyOrdersScreen() {
               filter === item.key && styles.filterButtonActive,
             ]}
             onPress={() => setFilter(item.key)}
+            activeOpacity={0.8}
           >
             <Text
               style={[
@@ -957,12 +702,7 @@ export default function MyOrdersScreen() {
 
       {visibleOrders.length === 0 ? (
         <View style={styles.emptyCard}>
-          <Ionicons
-            name="receipt-outline"
-            size={48}
-            color="#D96B8A"
-          />
-
+          <Ionicons name="receipt-outline" size={42} color={PINK} />
           <Text style={styles.emptyTitle}>
             {filter === 'all'
               ? 'No orders yet'
@@ -970,23 +710,15 @@ export default function MyOrdersScreen() {
                 ? 'No catalog orders yet'
                 : 'No custom requests yet'}
           </Text>
-
           <Text style={styles.emptyText}>
-            {filter === 'all'
-              ? 'Your catalog orders and custom garment requests will appear here.'
-              : filter === 'catalog'
-                ? 'Orders submitted through the product catalog will appear here.'
-                : 'Your custom garment requests will appear here after you submit them.'}
+            Your orders and custom garment requests will appear here.
           </Text>
-
           <TouchableOpacity
             style={styles.refreshButton}
             onPress={onRefresh}
             disabled={refreshing}
           >
-            <Text style={styles.refreshButtonText}>
-              Refresh Orders
-            </Text>
+            <Text style={styles.refreshButtonText}>Refresh Orders</Text>
           </TouchableOpacity>
         </View>
       ) : (
@@ -995,18 +727,12 @@ export default function MyOrdersScreen() {
           const status = getStatusInfo(data.status);
 
           return (
-            <View
-              key={`${order.type}-${data.id}`}
-              style={styles.orderCard}
-            >
-              <View style={styles.cardTop}>
-                <View style={styles.orderNumberContainer}>
-                  <Text style={styles.orderLabel}>
-                    {order.type === 'catalog'
-                      ? 'CATALOG ORDER'
-                      : 'CUSTOM REQUEST'}
+            <View key={`${order.type}-${data.id}`} style={styles.orderCard}>
+              <View style={styles.cardHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.orderType}>
+                    {order.type === 'catalog' ? 'CATALOG ORDER' : 'CUSTOM REQUEST'}
                   </Text>
-
                   <Text style={styles.orderNumber}>
                     #{data.id.slice(0, 8).toUpperCase()}
                   </Text>
@@ -1018,12 +744,7 @@ export default function MyOrdersScreen() {
                     { backgroundColor: status.background },
                   ]}
                 >
-                  <Text
-                    style={[
-                      styles.statusText,
-                      { color: status.color },
-                    ]}
-                  >
+                  <Text style={[styles.statusText, { color: status.color }]}>
                     {status.label}
                   </Text>
                 </View>
@@ -1037,9 +758,7 @@ export default function MyOrdersScreen() {
         })
       )}
 
-      <Text style={styles.footer}>
-        Pull down to refresh your order information.
-      </Text>
+      <Text style={styles.footer}>Pull down to refresh your orders.</Text>
     </ScrollView>
   );
 }
@@ -1057,347 +776,263 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    gap: 12,
     backgroundColor: '#FFF8FA',
   },
-  loadingText: {
-    marginTop: 12,
-    color: '#777',
-    fontSize: 14,
-  },
   heading: {
-    fontSize: 26,
-    fontWeight: '700',
-    color: '#B84470',
-    marginBottom: 6,
+    fontSize: 27,
+    fontWeight: '800',
+    color: DARK_PINK,
+    marginBottom: 5,
   },
   subtitle: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#777',
-    lineHeight: 21,
+    lineHeight: 20,
     marginBottom: 18,
   },
-  summaryRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 18,
-  },
-  summaryCard: {
-    flex: 1,
-    backgroundColor: '#FCE7EF',
-    padding: 13,
-    borderRadius: 13,
-  },
-  summaryNumber: {
-    color: '#B84470',
-    fontSize: 25,
-    fontWeight: '700',
-  },
-  summaryLabel: {
-    color: '#684754',
-    fontSize: 11,
-    marginTop: 3,
-  },
-  filterRow: {
+  countRow: {
     flexDirection: 'row',
     gap: 9,
     marginBottom: 18,
   },
+  countCard: {
+    flex: 1,
+    backgroundColor: '#FCE7EF',
+    borderRadius: 12,
+    padding: 12,
+    alignItems: 'center',
+  },
+  countNumber: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: DARK_PINK,
+  },
+  countLabel: {
+    fontSize: 11,
+    color: '#684754',
+    marginTop: 4,
+  },
+  filterRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
   filterButton: {
     flex: 1,
-    paddingVertical: 11,
+    paddingVertical: 10,
     borderRadius: 22,
     backgroundColor: '#F2E6EB',
     alignItems: 'center',
   },
   filterButtonActive: {
-    backgroundColor: '#D96B8A',
+    backgroundColor: PINK,
   },
   filterText: {
     color: '#684754',
     fontWeight: '600',
-    fontSize: 13,
+    fontSize: 12,
   },
   filterTextActive: {
-    color: '#fff',
+    color: '#FFFFFF',
   },
   orderCard: {
-    backgroundColor: '#fff',
+    backgroundColor: '#FFFFFF',
     borderRadius: 16,
-    padding: 16,
-    marginBottom: 16,
+    padding: 14,
+    marginBottom: 14,
     borderWidth: 1,
     borderColor: '#F0DFE6',
+    shadowColor: '#B84470',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 7,
+    elevation: 2,
   },
-  cardTop: {
+  cardHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'flex-start',
-    gap: 10,
+    justifyContent: 'space-between',
+    gap: 8,
     marginBottom: 14,
   },
-  orderNumberContainer: {
-    flex: 1,
-  },
-  orderLabel: {
+  orderType: {
     color: '#999',
     fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 1,
+    fontWeight: '800',
+    letterSpacing: 0.8,
   },
   orderNumber: {
-    color: '#B84470',
-    fontSize: 14,
-    fontWeight: '700',
+    color: DARK_PINK,
+    fontSize: 13,
+    fontWeight: '800',
     marginTop: 4,
   },
   statusBadge: {
-    borderRadius: 20,
+    borderRadius: 18,
     paddingVertical: 7,
-    paddingHorizontal: 10,
-    maxWidth: '60%',
+    paddingHorizontal: 9,
+    maxWidth: '55%',
   },
   statusText: {
-    fontSize: 11,
-    fontWeight: '700',
+    fontSize: 10,
+    fontWeight: '800',
     textAlign: 'center',
   },
-  referenceImage: {
-    width: '100%',
-    height: 230,
-    borderRadius: 12,
-    marginBottom: 16,
-    backgroundColor: '#F5E5EC',
+  productRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 12,
   },
-  imagePlaceholder: {
-    width: '100%',
-    height: 180,
-    borderRadius: 12,
-    backgroundColor: '#FFF0F5',
+  productInfo: {
+    flex: 1,
+    minWidth: 0,
     justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
-    padding: 16,
   },
-  placeholderText: {
-    color: '#94677A',
-    fontSize: 12,
-    textAlign: 'center',
-    marginTop: 8,
-  },
-  sectionLabel: {
-    color: '#B84470',
-    fontSize: 13,
+  orderDescription: {
+    fontSize: 15,
+    lineHeight: 21,
+    color: '#333333',
     fontWeight: '700',
     marginBottom: 6,
   },
-  description: {
-    color: '#333',
-    fontSize: 14,
-    lineHeight: 21,
-  },
-  dateRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 10,
-    marginTop: 16,
-  },
-  smallLabel: {
-    color: '#888',
+  itemSubtitle: {
     fontSize: 12,
+    lineHeight: 17,
+    color: '#765D67',
+    marginBottom: 4,
   },
-  dateText: {
-    color: '#555',
-    fontSize: 12,
+  mutedText: {
+    color: '#888888',
+    fontSize: 11,
+    lineHeight: 17,
+    marginTop: 2,
   },
-  divider: {
-    height: 1,
-    backgroundColor: '#F0E2E7',
-    marginVertical: 16,
-  },
-  sectionHeading: {
-    color: '#333',
+  priceText: {
+    color: DARK_PINK,
     fontSize: 15,
-    fontWeight: '700',
-    marginBottom: 12,
+    fontWeight: '800',
+    marginTop: 7,
   },
-  noteBox: {
-    backgroundColor: '#FFF8FA',
-    borderRadius: 10,
-    padding: 12,
-    marginTop: 12,
+  pendingPrice: {
+    color: '#946200',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 7,
   },
-  noteText: {
-    color: '#444',
-    fontSize: 13,
-    lineHeight: 20,
-    marginTop: 5,
-  },
-  priceRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 10,
-  },
-  priceLabel: {
-    color: '#666',
-    fontSize: 13,
-  },
-  priceValue: {
-    color: '#B84470',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  depositValue: {
-    color: '#333',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  helperText: {
-    color: '#777',
-    fontSize: 13,
-    lineHeight: 20,
-    marginTop: 8,
-  },
-  nextStep: {
-    color: '#8A4B67',
+  productImageContainer: {
+    width: 108,
+    height: 124,
+    borderRadius: 12,
+    overflow: 'hidden',
     backgroundColor: '#FFF0F5',
-    borderRadius: 10,
-    padding: 12,
-    fontSize: 12,
-    lineHeight: 19,
-    marginTop: 10,
+    flexShrink: 0,
   },
-  quotationActions: {
-    marginTop: 12,
-    gap: 10,
-  },
-  acceptButton: {
-    backgroundColor: '#237A4B',
-    borderRadius: 10,
-    paddingVertical: 13,
-    paddingHorizontal: 14,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
-  },
-  declineButton: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#F0B8BF',
-    borderRadius: 10,
-    paddingVertical: 13,
-    paddingHorizontal: 14,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
-  },
-  actionButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  declineButtonText: {
-    color: '#B42335',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  disabledButton: {
-    opacity: 0.6,
-  },
-  declinedMessage: {
-    color: '#B42335',
-    backgroundColor: '#FCE8EA',
-    borderRadius: 10,
-    padding: 12,
-    fontSize: 12,
-    lineHeight: 19,
-    marginTop: 10,
-  },
-  itemBox: {
-    backgroundColor: '#FFF8FA',
-    borderRadius: 11,
-    padding: 12,
-    marginBottom: 12,
-  },
-  itemTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#B84470',
-    marginBottom: 7,
-  },
-  itemDetail: {
-    fontSize: 13,
-    color: '#555',
-    lineHeight: 20,
-    marginBottom: 5,
-  },
-  designSection: {
-    marginTop: 8,
-    marginBottom: 12,
-  },
-  designHeading: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#684754',
-    marginBottom: 8,
-  },
-  designImage: {
+  productImage: {
     width: '100%',
-    height: 190,
-    borderRadius: 10,
+    height: '100%',
     backgroundColor: '#F5E5EC',
   },
-  designPlaceholder: {
-    width: '100%',
-    height: 140,
-    borderRadius: 10,
-    backgroundColor: '#FCE7EF',
+  productImagePlaceholder: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 12,
+    padding: 7,
   },
-  designName: {
-    color: '#B84470',
-    fontSize: 14,
-    fontWeight: '600',
+  smallPlaceholderText: {
+    color: '#94677A',
+    fontSize: 10,
+    textAlign: 'center',
+    marginTop: 6,
+  },
+  completionInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
     marginTop: 8,
   },
-  totalBox: {
-    backgroundColor: '#FCE7EF',
-    borderRadius: 11,
-    padding: 14,
-    marginTop: 4,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  totalLabel: {
-    fontSize: 14,
+  completionInlineText: {
+    color: '#237A4B',
+    fontSize: 11,
     fontWeight: '600',
-    color: '#684754',
+    flexShrink: 1,
   },
-  totalValue: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#B84470',
+  moreItemsText: {
+    color: '#8A6272',
+    fontSize: 11,
+    marginTop: -3,
+    marginBottom: 12,
+  },
+  quotationButton: {
+    backgroundColor: PINK,
+    borderRadius: 11,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 9,
+    marginTop: 2,
+    marginBottom: 9,
+  },
+  primaryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
+    flex: 1,
+    textAlign: 'center',
+  },
+  detailsButton: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 9,
+    borderWidth: 1,
+    borderColor: '#F0D4DF',
+    backgroundColor: '#FFFAFC',
+    borderRadius: 11,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    marginTop: 2,
+  },
+  receiptButton: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 9,
+    backgroundColor: PINK,
+    borderRadius: 11,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    marginTop: 9,
+  },
+  receiptButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
+    flex: 1,
+    textAlign: 'center',
+  },
+  detailsButtonText: {
+    color: DARK_PINK,
+    fontSize: 12,
+    fontWeight: '800',
+    flex: 1,
+    textAlign: 'center',
   },
   emptyCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 15,
     padding: 24,
     alignItems: 'center',
-    marginTop: 8,
     borderWidth: 1,
     borderColor: '#F0DFE6',
   },
   emptyTitle: {
-    color: '#B84470',
-    fontSize: 18,
-    fontWeight: '700',
+    color: DARK_PINK,
+    fontSize: 17,
+    fontWeight: '800',
     textAlign: 'center',
     marginTop: 12,
   },
@@ -1409,21 +1044,21 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   refreshButton: {
-    backgroundColor: '#D96B8A',
-    borderRadius: 10,
+    backgroundColor: PINK,
+    borderRadius: 9,
     paddingVertical: 11,
     paddingHorizontal: 18,
-    marginTop: 18,
+    marginTop: 16,
   },
   refreshButtonText: {
-    color: '#fff',
+    color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '700',
   },
   footer: {
     color: '#999',
-    fontSize: 12,
+    fontSize: 11,
     textAlign: 'center',
-    marginTop: 8,
+    marginTop: 5,
   },
 });

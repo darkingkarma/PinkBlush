@@ -14,11 +14,9 @@ import {
 } from 'react-native';
 
 import { useFocusEffect } from '@react-navigation/native';
-
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import type { RootStackParamList } from '../../navigator';
-
 import { supabase } from '../../../supabase';
 
 type Props = NativeStackScreenProps<
@@ -91,7 +89,6 @@ export default function ConfigurePartsScreen({
 
   const [loading, setLoading] = useState(true);
 
-  // Modal state
   const [modalType, setModalType] = useState<ModalType>(null);
   const [activePart, setActivePart] =
     useState<GarmentPart | null>(null);
@@ -100,7 +97,6 @@ export default function ConfigurePartsScreen({
   const [fabrics, setFabrics] = useState<Fabric[]>([]);
   const [loadingOptions, setLoadingOptions] = useState(false);
 
-  // Temporary selections are applied only when confirmed.
   const [pendingDesign, setPendingDesign] =
     useState<SelectedDesign | null>(null);
 
@@ -142,7 +138,7 @@ export default function ConfigurePartsScreen({
     setPendingFabric(null);
   };
 
-  // Open design modal and load designs for this part.
+  // Load designs belonging to the selected garment part.
   const openDesignModal = async (part: GarmentPart) => {
     setActivePart(part);
     setModalType('design');
@@ -169,8 +165,18 @@ export default function ConfigurePartsScreen({
     }
   };
 
-  // Open fabric modal using your existing relationship table.
+  // Load fabrics assigned to the selected design.
   const openFabricModal = async (part: GarmentPart) => {
+    const selectedDesign = selectedDesigns[part.id];
+
+    if (!selectedDesign) {
+      Alert.alert(
+        'Choose a Design First',
+        'Please select a design before choosing its fabric.'
+      );
+      return;
+    }
+
     setActivePart(part);
     setModalType('fabric');
     setLoadingOptions(true);
@@ -180,7 +186,7 @@ export default function ConfigurePartsScreen({
 
     try {
       const { data, error } = await supabase
-        .from('garment_fabrics')
+        .from('design_fabrics')
         .select(`
           fabric_id,
           fabrics (
@@ -192,13 +198,12 @@ export default function ConfigurePartsScreen({
             available
           )
         `)
-        .eq('garment_part_id', part.id);
+        .eq('design_id', selectedDesign.id);
 
       if (error) throw error;
 
       const fabricList = (data || [])
         .map((item: any) => {
-          // Supabase relationships may return an object or an array.
           const related = Array.isArray(item.fabrics)
             ? item.fabrics[0]
             : item.fabrics;
@@ -211,9 +216,25 @@ export default function ConfigurePartsScreen({
         ) as Fabric[];
 
       setFabrics(fabricList);
+
+      // Clear a previously selected fabric if it is not
+      // assigned to the currently selected design.
+      const currentFabric = selectedFabrics[part.id];
+
+      if (
+        currentFabric &&
+        !fabricList.some(
+          (fabric) => fabric.id === currentFabric.id
+        )
+      ) {
+        setPendingFabric(null);
+      }
     } catch (error) {
-      console.log('Error loading fabrics:', error);
-      Alert.alert('Error', 'Could not load fabrics for this part.');
+      console.log('Error loading design fabrics:', error);
+      Alert.alert(
+        'Error',
+        'Could not load fabrics assigned to this design.'
+      );
     } finally {
       setLoadingOptions(false);
     }
@@ -228,10 +249,25 @@ export default function ConfigurePartsScreen({
         return;
       }
 
+      const previousDesign = selectedDesigns[activePart.id];
+
       setSelectedDesigns((current) => ({
         ...current,
         [activePart.id]: pendingDesign,
       }));
+
+      // A different design may have different allowed fabrics.
+      // Clear the old fabric when the design changes.
+      if (
+        previousDesign &&
+        previousDesign.id !== pendingDesign.id
+      ) {
+        setSelectedFabrics((current) => {
+          const updated = { ...current };
+          delete updated[activePart.id];
+          return updated;
+        });
+      }
     }
 
     if (modalType === 'fabric') {
@@ -287,7 +323,25 @@ export default function ConfigurePartsScreen({
 
   const continueToMeasurements = () => {
     if (parts.length === 0) {
-      Alert.alert('No parts', 'Please select at least one garment part.');
+      Alert.alert(
+        'No parts',
+        'Please select at least one garment part.'
+      );
+      return;
+    }
+
+    // Every part must have both a design and its allowed fabric.
+    const incompletePart = parts.find(
+      (part) =>
+        !selectedDesigns[part.id] ||
+        !selectedFabrics[part.id]
+    );
+
+    if (incompletePart) {
+      Alert.alert(
+        'Incomplete Selection',
+        `Please choose both a design and a fabric for ${incompletePart.name}.`
+      );
       return;
     }
 
@@ -316,7 +370,9 @@ export default function ConfigurePartsScreen({
     });
   };
 
-  const renderOptionImage = (imageUrl: string | null | undefined) => {
+  const renderOptionImage = (
+    imageUrl: string | null | undefined
+  ) => {
     if (imageUrl) {
       return (
         <Image
@@ -340,7 +396,7 @@ export default function ConfigurePartsScreen({
         <Text style={styles.title}>Configure Parts</Text>
         <Text style={styles.subtitle}>{garment.name}</Text>
         <Text style={styles.helperText}>
-          Choose a design and fabric for each selected part.
+          Choose a design first, then select a fabric available for that design.
         </Text>
       </View>
 
@@ -400,7 +456,6 @@ export default function ConfigurePartsScreen({
                   </Text>
                 )}
 
-                {/* DESIGN BUTTON */}
                 <TouchableOpacity
                   style={styles.selectionBox}
                   onPress={() => openDesignModal(item)}
@@ -424,10 +479,13 @@ export default function ConfigurePartsScreen({
                   </Text>
                 </TouchableOpacity>
 
-                {/* FABRIC BUTTON */}
                 <TouchableOpacity
-                  style={styles.selectionBox}
+                  style={[
+                    styles.selectionBox,
+                    !design && styles.disabledSelectionBox,
+                  ]}
                   onPress={() => openFabricModal(item)}
+                  disabled={!design}
                 >
                   {renderOptionImage(fabric?.image_url)}
 
@@ -439,8 +497,11 @@ export default function ConfigurePartsScreen({
                         fabric && styles.selectedOptionText,
                       ]}
                     >
-                      {fabric?.name || 'Choose Fabric'}
+                      {!design
+                        ? 'Choose a design first'
+                        : fabric?.name || 'Choose Fabric'}
                     </Text>
+
                     {fabric && (
                       <Text style={styles.additionText}>
                         +₱{Number(fabric.price_addition).toFixed(2)}
@@ -453,7 +514,6 @@ export default function ConfigurePartsScreen({
                   </Text>
                 </TouchableOpacity>
 
-                {/* QUANTITY */}
                 <View style={styles.quantityBox}>
                   <Text style={styles.optionTitle}>Quantity</Text>
 
@@ -478,7 +538,6 @@ export default function ConfigurePartsScreen({
                   </View>
                 </View>
 
-                {/* SUBTOTAL */}
                 <View style={styles.subtotalBox}>
                   <Text style={styles.subtotalLabel}>Subtotal</Text>
                   <Text style={styles.subtotalAmount}>
@@ -491,7 +550,6 @@ export default function ConfigurePartsScreen({
         />
       )}
 
-      {/* DESIGN AND FABRIC MODAL */}
       <Modal
         visible={modalType !== null}
         transparent
@@ -595,7 +653,7 @@ export default function ConfigurePartsScreen({
                       No fabrics available
                     </Text>
                     <Text style={styles.emptyText}>
-                      No available fabrics are assigned to this part.
+                      No available fabrics are assigned to this design.
                     </Text>
                   </View>
                 }
@@ -758,6 +816,11 @@ const styles = StyleSheet.create({
     padding: 10,
     marginTop: 10,
     gap: 12,
+  },
+
+  disabledSelectionBox: {
+    opacity: 0.5,
+    backgroundColor: '#f8f8f8',
   },
 
   optionImage: {
@@ -923,7 +986,6 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
 
-  // Modal styles
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.4)',

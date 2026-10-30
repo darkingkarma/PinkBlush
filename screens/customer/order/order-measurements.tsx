@@ -1,3 +1,4 @@
+
 import { useCallback, useState } from 'react';
 
 import {
@@ -37,7 +38,12 @@ export default function OrderMeasurementsScreen({
   const [measurements, setMeasurements] =
     useState<any>(null);
 
+  const [loading, setLoading] =
+    useState(true);
+
   const loadMeasurements = async () => {
+    setLoading(true);
+
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -47,6 +53,8 @@ export default function OrderMeasurementsScreen({
         'Error',
         'You are not logged in.'
       );
+
+      setLoading(false);
       return;
     }
 
@@ -61,10 +69,13 @@ export default function OrderMeasurementsScreen({
         'Error',
         'Failed to load your measurements.'
       );
+
+      setLoading(false);
       return;
     }
 
     setMeasurements(data);
+    setLoading(false);
   };
 
   useFocusEffect(
@@ -93,20 +104,42 @@ export default function OrderMeasurementsScreen({
       return;
     }
 
-    navigation.navigate('ReviewOrder', {
-      orderData: route.params.orderData,
-      measurement: {
-        id: measurements.id,
-        shoulder: measurements.shoulder,
-        chest: measurements.chest,
-        waist: measurements.waist,
-        sleeve_length: measurements.sleeve_length,
-        top_length: measurements.top_length,
-        hips: measurements.hips,
-        inseam: measurements.inseam,
-        bottom_length: measurements.bottom_length,
-      },
-    });
+    const measurementData = {
+      id: measurements.id,
+      shoulder: measurements.shoulder,
+      chest: measurements.chest,
+      waist: measurements.waist,
+      sleeve_length: measurements.sleeve_length,
+      top_length: measurements.top_length,
+      hips: measurements.hips,
+      inseam: measurements.inseam,
+      bottom_length: measurements.bottom_length,
+    };
+
+    // CUSTOM ORDER FLOW
+    if (route.params.customOrderData) {
+      navigation.navigate('ReviewCustomOrder', {
+        customOrderData: route.params.customOrderData,
+        measurement: measurementData,
+      });
+
+      return;
+    }
+
+    // CATALOG ORDER FLOW
+    if (route.params.orderData) {
+      navigation.navigate('ReviewOrder', {
+        orderData: route.params.orderData,
+        measurement: measurementData,
+      });
+
+      return;
+    }
+
+    Alert.alert(
+      'Error',
+      'Order information is missing. Please try again.'
+    );
   };
 
   return (
@@ -116,7 +149,6 @@ export default function OrderMeasurementsScreen({
         contentContainerStyle={styles.content}
       >
         <View style={styles.header}>
-
           <Text style={styles.title}>
             Order Measurements
           </Text>
@@ -199,9 +231,7 @@ export default function OrderMeasurementsScreen({
         <TouchableOpacity
           style={styles.editButton}
           onPress={() =>
-            navigation.navigate(
-              'EditMeasurements'
-            )
+            navigation.navigate('EditMeasurements')
           }
         >
           <Text style={styles.editButtonText}>
@@ -210,11 +240,17 @@ export default function OrderMeasurementsScreen({
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={styles.continueButton}
+          style={[
+            styles.continueButton,
+            loading && { opacity: 0.5 },
+          ]}
           onPress={continueToReview}
+          disabled={loading}
         >
           <Text style={styles.continueButtonText}>
-            CONTINUE TO REVIEW
+            {loading
+              ? 'LOADING...'
+              : 'CONTINUE TO REVIEW'}
           </Text>
         </TouchableOpacity>
       </ScrollView>
@@ -261,12 +297,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginTop: 15,
     marginBottom: 20,
-  },
-
-  backButton: {
-    fontSize: 40,
-    color: '#d96b8a',
-    lineHeight: 40,
   },
 
   headerSpace: {

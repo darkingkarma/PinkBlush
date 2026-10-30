@@ -29,6 +29,7 @@ type CustomOrder = {
   quoted_price: number | null;
   deposit_amount: number | null;
   quotation_note: string | null;
+  estimated_completion_date: string | null;
   created_at: string;
 };
 
@@ -40,6 +41,9 @@ type CustomerProfile = {
   email: string | null;
   role: string | null;
 };
+
+const PINK = '#D96B8A';
+const DARK_PINK = '#B84470';
 
 export default function ManageOrdersScreen() {
   const navigation = useNavigation<any>();
@@ -61,7 +65,7 @@ export default function ManageOrdersScreen() {
       const { data, error } = await supabase
         .from('custom_orders')
         .select(
-          'id, user_id, reference_image_url, garment_description, special_instructions, preferred_color, fabric_preference, needed_by_date, status, quoted_price, deposit_amount, quotation_note, created_at'
+          'id, user_id, reference_image_url, garment_description, special_instructions, preferred_color, fabric_preference, needed_by_date, status, quoted_price, deposit_amount, quotation_note, estimated_completion_date, created_at'
         )
         .order('created_at', { ascending: false });
 
@@ -168,8 +172,16 @@ export default function ManageOrdersScreen() {
         quoted_price: order.quoted_price,
         deposit_amount: order.deposit_amount,
         quotation_note: order.quotation_note,
+        estimated_completion_date: order.estimated_completion_date,
         created_at: order.created_at,
       },
+    });
+  };
+
+  const openManageOrder = (orderId: string) => {
+    navigation.navigate('ManageOrder', {
+      orderId,
+      orderType: 'custom',
     });
   };
 
@@ -196,7 +208,7 @@ export default function ManageOrdersScreen() {
           <Ionicons
             name="person"
             size={21}
-            color="#d96b8a"
+            color={PINK}
           />
         </View>
 
@@ -204,6 +216,7 @@ export default function ManageOrdersScreen() {
           <Text style={styles.customerName}>
             {getCustomerName(userId)}
           </Text>
+
           <Text style={styles.customerCaption}>
             Customer Details
           </Text>
@@ -216,6 +229,7 @@ export default function ManageOrdersScreen() {
           size={17}
           color="#9a6477"
         />
+
         <Text style={styles.detailText}>
           {getCustomerEmail(userId)}
         </Text>
@@ -227,6 +241,7 @@ export default function ManageOrdersScreen() {
           size={17}
           color="#9a6477"
         />
+
         <Text style={styles.detailText}>
           {getCustomerContact(userId)}
         </Text>
@@ -239,8 +254,9 @@ export default function ManageOrdersScreen() {
       <View style={styles.center}>
         <ActivityIndicator
           size="large"
-          color="#d96b8a"
+          color={PINK}
         />
+
         <Text style={styles.loadingText}>
           Loading custom orders...
         </Text>
@@ -250,13 +266,36 @@ export default function ManageOrdersScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Heading with Total Order Count */}
       <View style={styles.header}>
-        <Text style={styles.heading}>Custom Orders</Text>
-        <Text style={styles.subtitle}>
-          Review requests, customer details, and quotations.
-        </Text>
+        <View style={styles.headingIcon}>
+          <Ionicons
+            name="cut-outline"
+            size={25}
+            color={PINK}
+          />
+        </View>
+
+        <View style={styles.headingText}>
+          <Text style={styles.heading}>Custom Orders</Text>
+
+          <Text style={styles.subtitle}>
+            Review requests and manage custom garment orders.
+          </Text>
+        </View>
+
+        <View style={styles.totalCountBadge}>
+          <Text style={styles.totalCountNumber}>
+            {orders.length}
+          </Text>
+
+          <Text style={styles.totalCountLabel}>
+            Total Orders
+          </Text>
+        </View>
       </View>
 
+      {/* Filters */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -297,7 +336,9 @@ export default function ManageOrdersScreen() {
         ))}
       </ScrollView>
 
+      {/* Orders List */}
       <ScrollView
+        style={styles.orderList}
         contentContainerStyle={styles.listContent}
         refreshControl={
           <RefreshControl
@@ -306,29 +347,10 @@ export default function ManageOrdersScreen() {
               setRefreshing(true);
               loadOrders(false);
             }}
-            tintColor="#d96b8a"
+            tintColor={PINK}
           />
         }
       >
-        <View style={styles.summaryCard}>
-          <View style={styles.summaryIcon}>
-            <Ionicons
-              name="receipt-outline"
-              size={25}
-              color="#d96b8a"
-            />
-          </View>
-
-          <View>
-            <Text style={styles.summaryNumber}>
-              {orders.length}
-            </Text>
-            <Text style={styles.summaryLabel}>
-              Total Custom Requests
-            </Text>
-          </View>
-        </View>
-
         {filteredOrders.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons
@@ -351,13 +373,28 @@ export default function ManageOrdersScreen() {
               key={order.id}
               style={styles.orderCard}
             >
+              {/* Order Header */}
               <View style={styles.cardTop}>
-                <Text
-                  style={styles.orderTitle}
-                  numberOfLines={2}
-                >
-                  {order.garment_description}
-                </Text>
+                <View style={styles.orderIcon}>
+                  <Ionicons
+                    name="shirt-outline"
+                    size={20}
+                    color={DARK_PINK}
+                  />
+                </View>
+
+                <View style={styles.orderTitleArea}>
+                  <Text
+                    style={styles.orderTitle}
+                    numberOfLines={2}
+                  >
+                    {order.garment_description}
+                  </Text>
+
+                  <Text style={styles.orderId}>
+                    #{order.id.slice(0, 8).toUpperCase()}
+                  </Text>
+                </View>
 
                 <View style={styles.statusBadge}>
                   <Text style={styles.statusText}>
@@ -366,13 +403,31 @@ export default function ManageOrdersScreen() {
                 </View>
               </View>
 
-              <Text style={styles.dateText}>
-                Submitted:{' '}
-                {new Date(order.created_at).toLocaleDateString()}
-              </Text>
+              {/* Submission Date */}
+              <View style={styles.dateRow}>
+                <Ionicons
+                  name="calendar-outline"
+                  size={15}
+                  color="#9B7784"
+                />
 
+                <Text style={styles.dateText}>
+                  Submitted:{' '}
+                  {new Date(order.created_at).toLocaleDateString(
+                    'en-PH',
+                    {
+                      year: 'numeric',
+                      month: 'short',
+                      day: 'numeric',
+                    }
+                  )}
+                </Text>
+              </View>
+
+              {/* Customer Details */}
               {renderCustomerDetails(order.user_id)}
 
+              {/* Order Preferences */}
               <View style={styles.preferenceBox}>
                 <Text style={styles.preferenceTitle}>
                   Order Preferences
@@ -391,11 +446,12 @@ export default function ManageOrdersScreen() {
                   {order.needed_by_date
                     ? new Date(
                         `${order.needed_by_date}T12:00:00`
-                      ).toLocaleDateString()
+                      ).toLocaleDateString('en-PH')
                     : 'Not specified'}
                 </Text>
               </View>
 
+              {/* Quotation */}
               {order.quoted_price != null && (
                 <View style={styles.priceRow}>
                   <Text style={styles.priceLabel}>
@@ -408,6 +464,7 @@ export default function ManageOrdersScreen() {
                 </View>
               )}
 
+              {/* Accepted Notice */}
               {order.status === 'accepted' && (
                 <View style={styles.decisionNotice}>
                   <Ionicons
@@ -415,12 +472,14 @@ export default function ManageOrdersScreen() {
                     size={19}
                     color="#238052"
                   />
+
                   <Text style={styles.decisionText}>
                     Customer accepted the quotation. Ready for the next step.
                   </Text>
                 </View>
               )}
 
+              {/* Declined Notice */}
               {order.status === 'declined' && (
                 <View style={styles.declinedNotice}>
                   <Ionicons
@@ -428,25 +487,60 @@ export default function ManageOrdersScreen() {
                     size={19}
                     color="#b44e70"
                   />
+
                   <Text style={styles.declinedText}>
                     Customer declined the quotation.
                   </Text>
                 </View>
               )}
 
+              {/* Review Request */}
               <TouchableOpacity
-                style={styles.viewButton}
+                style={styles.reviewButton}
                 onPress={() => openReviewRequest(order)}
+                activeOpacity={0.8}
               >
                 <Ionicons
                   name="eye-outline"
                   size={18}
                   color="#fff"
                 />
-                <Text style={styles.viewButtonText}>
+
+                <Text style={styles.buttonText}>
                   Review Request
                 </Text>
+
+                <Ionicons
+                  name="chevron-forward"
+                  size={17}
+                  color="#fff"
+                />
               </TouchableOpacity>
+
+              {/* Manage Order - Accepted Custom Orders */}
+              {order.status === 'accepted' && (
+                <TouchableOpacity
+                  style={styles.manageOrderButton}
+                  onPress={() => openManageOrder(order.id)}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons
+                    name="settings-outline"
+                    size={18}
+                    color="#fff"
+                  />
+
+                  <Text style={styles.buttonText}>
+                    Manage Order
+                  </Text>
+
+                  <Ionicons
+                    name="chevron-forward"
+                    size={17}
+                    color="#fff"
+                  />
+                </TouchableOpacity>
+              )}
             </View>
           ))
         )}
@@ -458,267 +552,359 @@ export default function ManageOrdersScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#faf9f8',
+    backgroundColor: '#FFF8FA',
+    paddingTop: 12,
   },
+
   center: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#faf9f8',
+    backgroundColor: '#FFF8FA',
   },
+
   loadingText: {
     marginTop: 12,
-    color: '#666',
+    color: '#8C6674',
   },
+
   header: {
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 14,
   },
+
+  headingIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: '#FCE7F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  headingText: {
+    flex: 1,
+    marginLeft: 10,
+  },
+
   heading: {
-    fontSize: 25,
-    fontWeight: 'bold',
-    color: '#1e2a4a',
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#3F2630',
   },
+
   subtitle: {
-    color: '#777',
-    fontSize: 13,
-    marginTop: 5,
-    lineHeight: 19,
+    color: '#8C6674',
+    fontSize: 11,
+    marginTop: 3,
   },
+
+  totalCountBadge: {
+    backgroundColor: '#FCE7F0',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
+
+  totalCountNumber: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: DARK_PINK,
+  },
+
+  totalCountLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#8B3455',
+  },
+
   filterScroll: {
-    maxHeight: 50,
+    maxHeight: 46,
     flexGrow: 0,
   },
+
   filterContainer: {
     paddingHorizontal: 16,
     paddingBottom: 8,
     alignItems: 'center',
+    gap: 8,
   },
+
   filterButton: {
-    paddingHorizontal: 15,
+    paddingHorizontal: 14,
     paddingVertical: 9,
-    borderRadius: 20,
-    backgroundColor: '#f0e8eb',
-    marginRight: 8,
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#F0D9E2',
   },
+
   activeFilter: {
-    backgroundColor: '#d96b8a',
+    backgroundColor: PINK,
+    borderColor: PINK,
   },
+
   filterText: {
-    color: '#76515e',
+    color: '#805C69',
     fontSize: 12,
     fontWeight: '600',
   },
+
   activeFilterText: {
-    color: '#fff',
+    color: '#FFFFFF',
   },
+
+  orderList: {
+    flex: 1,
+  },
+
   listContent: {
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingTop: 8,
     paddingBottom: 35,
   },
-  summaryCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    padding: 17,
-    borderRadius: 14,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#f0e6e9',
-  },
-  summaryIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 13,
-    backgroundColor: '#fff0f4',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 13,
-  },
-  summaryNumber: {
-    fontSize: 23,
-    fontWeight: 'bold',
-    color: '#1e2a4a',
-  },
-  summaryLabel: {
-    fontSize: 12,
-    color: '#777',
-    marginTop: 2,
-  },
+
   orderCard: {
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 13,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 17,
+    padding: 15,
+    marginBottom: 14,
     borderWidth: 1,
-    borderColor: '#f0e6e9',
+    borderColor: '#F3E3E9',
   },
+
   cardTop: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 8,
+    alignItems: 'center',
+    gap: 9,
   },
-  orderTitle: {
+
+  orderIcon: {
+    width: 39,
+    height: 39,
+    borderRadius: 12,
+    backgroundColor: '#FCE7F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  orderTitleArea: {
     flex: 1,
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#1e2a4a',
   },
-  statusBadge: {
-    backgroundColor: '#fff0f4',
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    borderRadius: 8,
-    maxWidth: 125,
+
+  orderTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#3F2630',
   },
-  statusText: {
-    color: '#b44e70',
+
+  orderId: {
+    color: '#9B7784',
     fontSize: 10,
-    fontWeight: 'bold',
+    marginTop: 3,
   },
+
+  statusBadge: {
+    backgroundColor: '#FCE7F0',
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 18,
+    maxWidth: 105,
+  },
+
+  statusText: {
+    color: DARK_PINK,
+    fontSize: 10,
+    fontWeight: '700',
+  },
+
+  dateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    marginTop: 12,
+  },
+
   dateText: {
-    color: '#888',
-    fontSize: 12,
-    marginTop: 10,
+    color: '#9B7784',
+    fontSize: 11,
   },
+
   customerBox: {
-    backgroundColor: '#fff8fa',
+    backgroundColor: '#FFF8FA',
     borderWidth: 1,
-    borderColor: '#f1dce4',
+    borderColor: '#F1DCE4',
     borderRadius: 12,
     padding: 12,
     marginTop: 13,
   },
+
   customerHeading: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 10,
   },
+
   customerIcon: {
     width: 40,
     height: 40,
     borderRadius: 12,
-    backgroundColor: '#ffeaf1',
+    backgroundColor: '#FFEAF1',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 10,
   },
+
   customerName: {
     fontSize: 14,
     fontWeight: 'bold',
-    color: '#1e2a4a',
+    color: '#3F2630',
   },
+
   customerCaption: {
     fontSize: 11,
-    color: '#98727f',
+    color: '#98727F',
     marginTop: 2,
   },
+
   detailRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 8,
     marginTop: 7,
   },
+
   detailText: {
     flex: 1,
-    color: '#66545b',
+    color: '#66545B',
     fontSize: 12,
     lineHeight: 18,
   },
+
   preferenceBox: {
-    backgroundColor: '#fff',
+    backgroundColor: '#FFFAFC',
     borderWidth: 1,
-    borderColor: '#f1eaec',
-    borderRadius: 10,
+    borderColor: '#F1EAEC',
+    borderRadius: 12,
     padding: 12,
     marginTop: 12,
   },
+
   preferenceTitle: {
-    color: '#1e2a4a',
+    color: '#3F2630',
     fontSize: 12,
     fontWeight: 'bold',
     marginBottom: 7,
   },
+
   preferenceText: {
-    color: '#66545b',
+    color: '#66545B',
     fontSize: 12,
     lineHeight: 20,
   },
+
   priceRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginTop: 13,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: '#f1eaec',
+    borderTopColor: '#F1EAEC',
   },
+
   priceLabel: {
     color: '#666',
     fontSize: 13,
   },
+
   priceValue: {
     color: '#238052',
     fontSize: 15,
     fontWeight: 'bold',
   },
+
   decisionNotice: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: '#eaf8ef',
+    backgroundColor: '#EAF8EF',
     padding: 11,
     borderRadius: 9,
     marginTop: 12,
   },
+
   decisionText: {
     flex: 1,
     color: '#237346',
     fontSize: 12,
     lineHeight: 18,
   },
+
   declinedNotice: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: '#fff0f4',
+    backgroundColor: '#FFF0F4',
     padding: 11,
     borderRadius: 9,
     marginTop: 12,
   },
+
   declinedText: {
     flex: 1,
-    color: '#a33d61',
+    color: '#A33D61',
     fontSize: 12,
     lineHeight: 18,
   },
-  viewButton: {
-    backgroundColor: '#d96b8a',
-    borderRadius: 10,
-    padding: 12,
+
+  reviewButton: {
+    backgroundColor: '#D96B8A',
+    borderRadius: 11,
+    padding: 13,
     marginTop: 14,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 8,
+    gap: 9,
   },
-  viewButtonText: {
-    color: '#fff',
+
+  manageOrderButton: {
+    backgroundColor: DARK_PINK,
+    borderRadius: 11,
+    padding: 13,
+    marginTop: 9,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 9,
+  },
+
+  buttonText: {
+    color: '#FFFFFF',
     fontSize: 13,
-    fontWeight: 'bold',
+    fontWeight: '800',
+    flex: 1,
+    textAlign: 'center',
   },
+
   emptyState: {
     alignItems: 'center',
     paddingVertical: 45,
     paddingHorizontal: 20,
   },
+
   emptyTitle: {
     fontSize: 17,
     fontWeight: 'bold',
-    color: '#1e2a4a',
+    color: '#3F2630',
     marginTop: 12,
   },
+
   emptyText: {
     color: '#888',
     textAlign: 'center',

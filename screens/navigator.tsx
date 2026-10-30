@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from 'react';
 
 import {
@@ -41,17 +42,18 @@ import CustomerGarmentsScreen from './customer/order/garments';
 import CustomerGarmentDetailsScreen from './customer/order/garment-details';
 import ConfigurePartsScreen from './customer/order/configure-parts';
 import MyOrdersScreen from './customer/order/my-orders';
+import OrderDetailsScreen from './customer/order/order-details';
+import ReviewQuotationScreen from './customer/order/review-quotation';
 import CustomOrderScreen from './customer/order/custom-order';
 import CatalogScreen from './customer/order/catalog';
+import PaymentScreen from './customer/order/payment';
+import ReceiptScreen from './customer/order/receipt';
+
+// Import this screen after creating the file.
+// import ReviewCustomOrderScreen from './customer/order/review-custom-order';
 
 import GarmentCategoriesScreen from './staff/product/garment-categories';
-import AddGarmentCategoryScreen from './staff/product/add-garment-category';
-import EditGarmentCategoryScreen from './staff/product/edit-garment-category';
-
 import ManageGarmentsScreen from './staff/product/manage-garments';
-import GarmentsScreen from './staff/product/garment';
-import AddGarmentScreen from './staff/product/add-garment';
-import EditGarmentScreen from './staff/product/edit-garment';
 
 import AddGarmentPartScreen from './staff/product/add-garment-part';
 import EditGarmentPartScreen from './staff/product/edit-garment-part';
@@ -60,15 +62,32 @@ import AddDesignScreen from './staff/product/add-design';
 import EditDesignScreen from './staff/product/edit-design';
 
 import FabricsScreen from './staff/product/fabrics';
-import AddFabricScreen from './staff/product/add-fabric';
-import EditFabricScreen from './staff/product/edit-fabric';
 
 import GarmentDetailsScreen from './staff/product/garment-details';
 
 import ManageOrdersScreen from './staff/orders/manage-orders';
 import ReviewRequestScreen from './staff/orders/review-request';
+import CatalogOrdersScreen from './staff/orders/catalog-orders';
 
+import ManageTailorsScreen from './staff/tailors/manage-tailors';
+import TailorAssignmentsScreen from './staff/tailors/manage-tailor-assignments';
+import ProductionTrackingScreen from './staff/orders/production-tracking';
+
+import ManageOrderScreen from './staff/orders/manage-order';
 import { supabase } from '../supabase';
+
+// =====================================================
+// CUSTOM ORDER DRAFT TYPE
+// =====================================================
+
+export type CustomOrderDraft = {
+  referenceImagePath: string | null;
+  garmentDescription: string;
+  preferredColor: string | null;
+  fabricPreference: string | null;
+  neededByDate: string | null;
+  specialInstructions: string | null;
+};
 
 // =====================================================
 // ROOT NAVIGATION TYPES
@@ -81,7 +100,17 @@ export type RootStackParamList = {
 
   Main: undefined;
   StaffDashboard: undefined;
+  ManageTailors: undefined;
   MyOrders: undefined;
+
+  OrderDetails: {
+    orderId: string;
+    orderType: 'custom' | 'catalog';
+  };
+
+  ReviewQuotation: {
+    orderId: string;
+  };
 
   OrderType: undefined;
   CustomOrder: undefined;
@@ -132,7 +161,7 @@ export type RootStackParamList = {
   };
 
   OrderMeasurements: {
-    orderData: {
+    orderData?: {
       garment: {
         id: string;
         name: string;
@@ -155,6 +184,8 @@ export type RootStackParamList = {
       }[];
       totalAmount: number;
     };
+
+    customOrderData?: CustomOrderDraft;
   };
 
   ReviewOrder: {
@@ -181,6 +212,23 @@ export type RootStackParamList = {
       }[];
       totalAmount: number;
     };
+
+    measurement: {
+      id: string;
+      shoulder: number | null;
+      chest: number | null;
+      waist: number | null;
+      sleeve_length: number | null;
+      top_length: number | null;
+      hips: number | null;
+      inseam: number | null;
+      bottom_length: number | null;
+    };
+  };
+
+  ReviewCustomOrder: {
+    customOrderData: CustomOrderDraft;
+
     measurement: {
       id: string;
       shoulder: number | null;
@@ -199,29 +247,8 @@ export type RootStackParamList = {
 
   ManageGarments: undefined;
   GarmentCategories: undefined;
-  AddGarmentCategory: undefined;
-
-  EditGarmentCategory: {
-    category: {
-      id: string;
-      name: string;
-      description: string | null;
-    };
-  };
 
   Garments: undefined;
-  AddGarment: undefined;
-
-  EditGarment: {
-    garment: {
-      id: string;
-      name: string;
-      description: string | null;
-      available: boolean;
-      category_id: string;
-      image_url: string | null;
-    };
-  };
 
   AddGarmentPart: {
     garmentId: string;
@@ -254,18 +281,6 @@ export type RootStackParamList = {
   };
 
   Fabrics: undefined;
-  AddFabric: undefined;
-
-  EditFabric: {
-    fabric: {
-      id: string;
-      name: string;
-      description: string | null;
-      image_url: string | null;
-      price_addition: number;
-      available: boolean;
-    };
-  };
 
   GarmentDetails: {
     garment: {
@@ -292,8 +307,26 @@ export type RootStackParamList = {
       quoted_price: number | null;
       deposit_amount: number | null;
       quotation_note: string | null;
+      estimated_completion_date: string | null;
       created_at: string;
     };
+  };
+
+  ManageOrder: {
+    orderId: string;
+    orderType: 'custom' | 'catalog';
+  };
+
+  Payment: {
+    orderId: string;
+    orderType: 'catalog' | 'custom';
+    totalAmount: number;
+  };
+
+  Receipt: {
+    orderId: string;
+    paymentId: string;
+    orderType: 'catalog' | 'custom';
   };
 };
 
@@ -307,6 +340,7 @@ export type MainTabParamList = {
 export type StaffTabParamList = {
   Dashboard: undefined;
   ManageOrders: undefined;
+  Tailors: undefined;
   Garments: undefined;
   Profile: undefined;
 };
@@ -348,40 +382,11 @@ function StaffGarmentsStack() {
         component={ManageGarmentsScreen}
         options={{ title: 'Garment Management' }}
       />
+
       <StaffGarmentStack.Screen
         name="GarmentCategories"
         component={GarmentCategoriesScreen}
         options={{ title: 'Garment Categories' }}
-      />
-
-      <StaffGarmentStack.Screen
-        name="AddGarmentCategory"
-        component={AddGarmentCategoryScreen}
-        options={{ title: 'Add Category' }}
-      />
-
-      <StaffGarmentStack.Screen
-        name="EditGarmentCategory"
-        component={EditGarmentCategoryScreen}
-        options={{ title: 'Edit Category' }}
-      />
-
-      <StaffGarmentStack.Screen
-        name="Garments"
-        component={GarmentsScreen}
-        options={{ title: 'All Garments' }}
-      />
-
-      <StaffGarmentStack.Screen
-        name="AddGarment"
-        component={AddGarmentScreen}
-        options={{ title: 'Add Garment' }}
-      />
-
-      <StaffGarmentStack.Screen
-        name="EditGarment"
-        component={EditGarmentScreen}
-        options={{ title: 'Edit Garment' }}
       />
 
       <StaffGarmentStack.Screen
@@ -418,18 +423,6 @@ function StaffGarmentsStack() {
         name="Fabrics"
         component={FabricsScreen}
         options={{ title: 'Manage Fabrics' }}
-      />
-
-      <StaffGarmentStack.Screen
-        name="AddFabric"
-        component={AddFabricScreen}
-        options={{ title: 'Add Fabric' }}
-      />
-
-      <StaffGarmentStack.Screen
-        name="EditFabric"
-        component={EditFabricScreen}
-        options={{ title: 'Edit Fabric' }}
       />
     </StaffGarmentStack.Navigator>
   );
@@ -548,7 +541,7 @@ function StaffDashboardTab() {
       </Text>
 
       <Text style={staffStyles.description}>
-        Use the tabs below to manage orders and garments.
+        Use the tabs below to manage orders, tailors, and garments.
       </Text>
     </View>
   );
@@ -559,7 +552,113 @@ function StaffDashboardTab() {
 // =====================================================
 
 function StaffManageOrdersTab() {
-  return <ManageOrdersScreen />;
+  const [selectedOrderType, setSelectedOrderType] =
+    useState<'catalog' | 'custom'>('catalog');
+
+  const menuButtonStyle = (selected: boolean) => ({
+    flex: 1,
+    minHeight: 65,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    borderRadius: 12,
+    backgroundColor: selected ? '#D96B8A' : '#FFFFFF',
+    borderWidth: 1,
+    borderColor: selected ? '#D96B8A' : '#F0D9E2',
+  });
+
+  const menuTextStyle = (selected: boolean) => ({
+    marginTop: 5,
+    fontWeight: '700' as const,
+    fontSize: 12,
+    textAlign: 'center' as const,
+    color: selected ? '#FFFFFF' : '#B84470',
+  });
+
+  return (
+    <View style={{ flex: 1, backgroundColor: '#FFF8FA' }}>
+      <View
+        style={{
+          paddingHorizontal: 14,
+          paddingTop: 12,
+          paddingBottom: 12,
+          backgroundColor: '#FFFFFF',
+        }}
+      >
+        <Text
+          style={{
+            fontSize: 21,
+            fontWeight: '800',
+            color: '#3F2630',
+          }}
+        >
+          Manage Orders
+        </Text>
+
+        <Text
+          style={{
+            fontSize: 11,
+            color: '#8C6674',
+            marginTop: 3,
+            marginBottom: 12,
+          }}
+        >
+          View orders, assign tailors, and manage production.
+        </Text>
+
+        <View style={{ flexDirection: 'row', gap: 10 }}>
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => setSelectedOrderType('catalog')}
+            style={menuButtonStyle(selectedOrderType === 'catalog')}
+          >
+            <Ionicons
+              name="shirt-outline"
+              size={23}
+              color={
+                selectedOrderType === 'catalog'
+                  ? '#FFFFFF'
+                  : '#D96B8A'
+              }
+            />
+
+            <Text style={menuTextStyle(selectedOrderType === 'catalog')}>
+              Catalog Orders
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => setSelectedOrderType('custom')}
+            style={menuButtonStyle(selectedOrderType === 'custom')}
+          >
+            <Ionicons
+              name="cut-outline"
+              size={23}
+              color={
+                selectedOrderType === 'custom'
+                  ? '#FFFFFF'
+                  : '#D96B8A'
+              }
+            />
+
+            <Text style={menuTextStyle(selectedOrderType === 'custom')}>
+              Custom Orders
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <View style={{ flex: 1 }}>
+        {selectedOrderType === 'catalog' ? (
+          <CatalogOrdersScreen />
+        ) : (
+          <ManageOrdersScreen />
+        )}
+      </View>
+    </View>
+  );
 }
 
 // =====================================================
@@ -568,23 +667,27 @@ function StaffManageOrdersTab() {
 
 function StaffProfileTab() {
   const handleLogout = async () => {
-    Alert.alert('Logout', 'Are you sure you want to log out?', [
-      {
-        text: 'Cancel',
-        style: 'cancel',
-      },
-      {
-        text: 'Logout',
-        style: 'destructive',
-        onPress: async () => {
-          const { error } = await supabase.auth.signOut();
-
-          if (error) {
-            Alert.alert('Logout Failed', error.message);
-          }
+    Alert.alert(
+      'Logout',
+      'Are you sure you want to log out?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
         },
-      },
-    ]);
+        {
+          text: 'Logout',
+          style: 'destructive',
+          onPress: async () => {
+            const { error } = await supabase.auth.signOut();
+
+            if (error) {
+              Alert.alert('Logout Failed', error.message);
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -656,8 +759,6 @@ function StaffTabs() {
         },
       }}
     >
-      {/* DASHBOARD */}
-
       <StaffTab.Screen
         name="Dashboard"
         component={StaffDashboardTab}
@@ -674,8 +775,6 @@ function StaffTabs() {
           ),
         }}
       />
-
-      {/* ORDERS */}
 
       <StaffTab.Screen
         name="ManageOrders"
@@ -694,8 +793,22 @@ function StaffTabs() {
         }}
       />
 
-      {/* GARMENTS
-          Show tabs only on the main Garment Management screen. */}
+      <StaffTab.Screen
+        name="Tailors"
+        component={ManageTailorsScreen}
+        options={{
+          headerTitle: 'Manage Tailors',
+          tabBarLabel: 'Tailors',
+
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons
+              name={focused ? 'people' : 'people-outline'}
+              size={size}
+              color={color}
+            />
+          ),
+        }}
+      />
 
       <StaffTab.Screen
         name="Garments"
@@ -734,8 +847,6 @@ function StaffTabs() {
           };
         }}
       />
-
-      {/* PROFILE */}
 
       <StaffTab.Screen
         name="Profile"
@@ -822,8 +933,11 @@ const screenTitles: Partial<
   Register: 'Create Account',
 
   StaffDashboard: 'Staff Dashboard',
+  ManageTailors: 'Manage Tailors',
 
   MyOrders: 'My Orders',
+  OrderDetails: 'Order Details',
+  ReviewQuotation: 'Review Quotation',
   Measurements: 'My Measurements',
   EditMeasurements: 'Edit Measurements',
 
@@ -836,15 +950,16 @@ const screenTitles: Partial<
   ConfigureParts: 'Configure Garment',
   OrderMeasurements: 'Measurements',
   ReviewOrder: 'Review Order',
+  ReviewCustomOrder: 'Review Custom Order',
+
+  Payment: 'Pay Deposit',
+  Receipt: 'Order Receipt',
+  ReviewRequest: 'Review Custom Order',
 
   ManageGarments: 'Garment Management',
   GarmentCategories: 'Garment Categories',
-  AddGarmentCategory: 'Add Category',
-  EditGarmentCategory: 'Edit Category',
 
   Garments: 'Garments',
-  AddGarment: 'Add Garment',
-  EditGarment: 'Edit Garment',
 
   AddGarmentPart: 'Add Garment Part',
   EditGarmentPart: 'Edit Garment Part',
@@ -853,10 +968,9 @@ const screenTitles: Partial<
   EditDesign: 'Edit Design',
 
   Fabrics: 'Manage Fabrics',
-  AddFabric: 'Add Fabric',
-  EditFabric: 'Edit Fabric',
 
   GarmentDetails: 'Garment Details',
+  ManageOrder: 'Manage Order',
 };
 
 // =====================================================
@@ -1004,11 +1118,8 @@ export default function AppNavigator() {
               : 'Welcome'
         }
         screenOptions={({ route }) => {
-          const isMain =
-            route.name === 'Main';
-
-          const isStaffMain =
-            route.name === 'StaffDashboard';
+          const isMain = route.name === 'Main';
+          const isStaffMain = route.name === 'StaffDashboard';
 
           return {
             headerShown: !isMain && !isStaffMain,
@@ -1071,6 +1182,20 @@ export default function AppNavigator() {
         />
 
         <Stack.Screen
+          name="ManageTailors"
+          component={ManageTailorsScreen}
+          options={{
+            title: 'Manage Tailors',
+          }}
+        />
+
+        <Stack.Screen
+          name="ManageOrder"
+          component={ManageOrderScreen}
+          options={{ title: 'Manage Order' }}
+        />
+
+        <Stack.Screen
           name="ReviewRequest"
           component={ReviewRequestScreen}
           options={{
@@ -1083,6 +1208,16 @@ export default function AppNavigator() {
         <Stack.Screen
           name="MyOrders"
           component={MyOrdersScreen}
+        />
+
+        <Stack.Screen
+          name="OrderDetails"
+          component={OrderDetailsScreen}
+        />
+
+        <Stack.Screen
+          name="ReviewQuotation"
+          component={ReviewQuotationScreen}
         />
 
         <Stack.Screen
@@ -1110,6 +1245,26 @@ export default function AppNavigator() {
           component={ReviewOrderScreen}
         />
 
+        {/* Add this registration when ReviewCustomOrderScreen exists. */}
+        {/*
+        <Stack.Screen
+          name="ReviewCustomOrder"
+          component={ReviewCustomOrderScreen}
+        />
+        */}
+
+        <Stack.Screen
+          name="Payment"
+          component={PaymentScreen}
+          options={{ title: 'Pay Deposit' }}
+        />
+
+        <Stack.Screen
+          name="Receipt"
+          component={ReceiptScreen}
+          options={{ title: 'Order Receipt' }}
+        />
+
         <Stack.Screen
           name="OrderType"
           component={OrderTypeScreen}
@@ -1135,44 +1290,16 @@ export default function AppNavigator() {
           component={ConfigurePartsScreen}
         />
 
-        {/* ROOT STAFF ROUTES
-            Retained to support any existing screens
-            that currently navigate through the root stack. */}
+        {/* ROOT STAFF ROUTES */}
 
         <Stack.Screen
           name="ManageGarments"
           component={ManageGarmentsScreen}
         />
-        
 
         <Stack.Screen
           name="GarmentCategories"
           component={GarmentCategoriesScreen}
-        />
-
-        <Stack.Screen
-          name="AddGarmentCategory"
-          component={AddGarmentCategoryScreen}
-        />
-
-        <Stack.Screen
-          name="EditGarmentCategory"
-          component={EditGarmentCategoryScreen}
-        />
-
-        <Stack.Screen
-          name="Garments"
-          component={GarmentsScreen}
-        />
-
-        <Stack.Screen
-          name="AddGarment"
-          component={AddGarmentScreen}
-        />
-
-        <Stack.Screen
-          name="EditGarment"
-          component={EditGarmentScreen}
         />
 
         <Stack.Screen
@@ -1198,16 +1325,6 @@ export default function AppNavigator() {
         <Stack.Screen
           name="Fabrics"
           component={FabricsScreen}
-        />
-
-        <Stack.Screen
-          name="AddFabric"
-          component={AddFabricScreen}
-        />
-
-        <Stack.Screen
-          name="EditFabric"
-          component={EditFabricScreen}
         />
 
         <Stack.Screen
