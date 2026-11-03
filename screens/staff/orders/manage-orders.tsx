@@ -1,6 +1,4 @@
-
 import { useCallback, useEffect, useState } from 'react';
-
 import {
   ActivityIndicator,
   Alert,
@@ -8,11 +6,12 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
 
-import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { supabase } from '../../../supabase';
 
@@ -42,75 +41,241 @@ type CustomerProfile = {
   role: string | null;
 };
 
+type ProductionProgress = {
+  status: string;
+  updated_at: string | null;
+};
+
+type FilterType =
+  | 'All'
+  | 'Submitted'
+  | 'Under Review'
+  | 'Quotation Sent'
+  | 'Accepted'
+  | 'In Production'
+  | 'Ready for Fitting'
+  | 'Ready for Release'
+  | 'Completed'
+  | 'Declined'
+  | 'Cancelled';
+
 const PINK = '#D96B8A';
 const DARK_PINK = '#B84470';
+const BACKGROUND = '#FFF9FB';
+const TEXT_DARK = '#392831';
+const TEXT_MUTED = '#8D7780';
+
+const FILTERS: FilterType[] = [
+  'All',
+  'Submitted',
+  'Under Review',
+  'Quotation Sent',
+  'Accepted',
+  'In Production',
+  'Ready for Fitting',
+  'Ready for Release',
+  'Completed',
+  'Declined',
+  'Cancelled',
+];
+
+const PROGRESS_FILTERS = [
+  'All',
+  'assigned',
+  'cutting',
+  'sewing',
+  'fitting',
+  'finishing',
+  'ready_for_pickup',
+  'completed',
+];
+
+// NORMALIZE ORDER STATUS
+const normalizeStatus = (status: string | null | undefined) =>
+  (status ?? '')
+    .toLowerCase()
+    .trim()
+    .replace(/[_-]/g, ' ')
+    .replace(/\s+/g, ' ');
+
+// NORMALIZE PRODUCTION STATUS
+const normalizeProgress = (status: string | null | undefined) =>
+  (status ?? '')
+    .toLowerCase()
+    .trim()
+    .replace(/[\s-]+/g, '_');
+
+// FORMAT STATUS FOR DISPLAY
+const formatStatus = (status: string) => {
+  const normalized = normalizeStatus(status);
+
+  return normalized.replace(/\b\w/g, (letter) =>
+    letter.toUpperCase()
+  );
+};
+
+// MATCH CUSTOM ORDER FILTER
+const matchesOrderFilter = (
+  status: string,
+  selectedFilter: FilterType
+) => {
+  const normalized = normalizeStatus(status);
+
+  switch (selectedFilter) {
+    case 'All':
+      return true;
+
+    case 'Submitted':
+      return normalized === 'submitted';
+
+    case 'Under Review':
+      return normalized === 'under review';
+
+    case 'Quotation Sent':
+      return normalized === 'quotation sent';
+
+    case 'Accepted':
+      return normalized === 'accepted';
+
+    case 'In Production':
+      return normalized === 'in production';
+
+    case 'Ready for Fitting':
+      return normalized === 'ready for fitting';
+
+    case 'Ready for Release':
+      return normalized === 'ready for release';
+
+    case 'Completed':
+      return normalized === 'completed';
+
+    case 'Declined':
+      return normalized === 'declined';
+
+    case 'Cancelled':
+      return normalized === 'cancelled';
+
+    default:
+      return true;
+  }
+};
 
 export default function ManageOrdersScreen() {
   const navigation = useNavigation<any>();
+  const { width } = useWindowDimensions();
+  const isLargeScreen = width >= 700;
 
   const [orders, setOrders] = useState<CustomOrder[]>([]);
-  const [customerProfiles, setCustomerProfiles] =
-    useState<Record<string, CustomerProfile>>({});
+
+  const [customerProfiles, setCustomerProfiles] = useState<
+    Record<string, CustomerProfile>
+  >({});
+
+  const [productionProgress, setProductionProgress] = useState<
+    Record<string, ProductionProgress>
+  >({});
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [filter, setFilter] = useState('All');
 
+  const [filter, setFilter] = useState<FilterType>('All');
+  const [progressFilter, setProgressFilter] = useState('All');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // LOAD CUSTOM ORDERS
   const loadOrders = useCallback(async (showLoader = true) => {
-    if (showLoader) {
-      setLoading(true);
-    }
-
     try {
+      if (showLoader) setLoading(true);
+
       const { data, error } = await supabase
         .from('custom_orders')
-        .select(
-          'id, user_id, reference_image_url, garment_description, special_instructions, preferred_color, fabric_preference, needed_by_date, status, quoted_price, deposit_amount, quotation_note, estimated_completion_date, created_at'
-        )
+        .select(`
+          id,
+          user_id,
+          reference_image_url,
+          garment_description,
+          special_instructions,
+          preferred_color,
+          fabric_preference,
+          needed_by_date,
+          status,
+          quoted_price,
+          deposit_amount,
+          quotation_note,
+          estimated_completion_date,
+          created_at
+        `)
         .order('created_at', { ascending: false });
 
-      if (error) {
-        throw error;
+      if (error) throw error;
+
+      const orderData = (data || []) as CustomOrder[];
+
+      setOrders(orderData);
+
+      const orderIds = orderData.map((order) => order.id);
+
+      // LOAD LATEST PRODUCTION PROGRESS
+      if (orderIds.length > 0) {
+        const { data: productionData, error: productionError } =
+          await supabase
+            .from('production_tracking')
+            .select('id, custom_order_id, status, updated_at')
+            .in('custom_order_id', orderIds)
+            .order('updated_at', { ascending: false });
+
+        if (productionError) throw productionError;
+
+        const progressMap: Record<string, ProductionProgress> = {};
+
+        (productionData || []).forEach((record: any) => {
+          if (
+            record.custom_order_id &&
+            !progressMap[record.custom_order_id]
+          ) {
+            progressMap[record.custom_order_id] = {
+              status: record.status,
+              updated_at: record.updated_at,
+            };
+          }
+        });
+
+        setProductionProgress(progressMap);
+      } else {
+        setProductionProgress({});
       }
 
-      const orderList = (data ?? []) as CustomOrder[];
-
-      setOrders(orderList);
-
+      // LOAD CUSTOMER PROFILES
       const customerIds = [
-        ...new Set(orderList.map((order) => order.user_id)),
+        ...new Set(orderData.map((order) => order.user_id)),
       ];
 
       if (customerIds.length > 0) {
-        const { data: profiles, error: profileError } =
-          await supabase
-            .from('profiles')
-            .select(
-              'id, username, full_name, contact_number, email, role'
-            )
-            .in('id', customerIds);
+        const { data: profiles, error: profileError } = await supabase
+          .from('profiles')
+          .select(
+            'id, username, full_name, contact_number, email, role'
+          )
+          .in('id', customerIds);
 
-        if (profileError) {
-          console.warn(
-            'Could not load customer profiles:',
-            profileError.message
-          );
-        } else {
-          const profileMap: Record<string, CustomerProfile> = {};
+        if (profileError) throw profileError;
 
-          (profiles ?? []).forEach((profile) => {
-            profileMap[profile.id] = profile as CustomerProfile;
-          });
+        const profileMap: Record<string, CustomerProfile> = {};
 
-          setCustomerProfiles(profileMap);
-        }
+        (profiles || []).forEach((profile: CustomerProfile) => {
+          profileMap[profile.id] = profile;
+        });
+
+        setCustomerProfiles(profileMap);
       } else {
         setCustomerProfiles({});
       }
     } catch (error: any) {
+      console.error('Error loading custom orders:', error);
+
       Alert.alert(
-        'Unable to Load Orders',
-        error?.message ?? 'Please try again.'
+        'Error',
+        error.message || 'Unable to load custom orders.'
       );
     } finally {
       setLoading(false);
@@ -122,140 +287,183 @@ export default function ManageOrdersScreen() {
     loadOrders();
   }, [loadOrders]);
 
+  const handleRefresh = () => {
+    setRefreshing(true);
+    loadOrders(false);
+  };
+
+  // CUSTOMER INFORMATION
   const getCustomerName = (userId: string) => {
-    const profile = customerProfiles[userId];
+    const customer = customerProfiles[userId];
 
     return (
-      profile?.full_name?.trim() ||
-      profile?.username?.trim() ||
-      'Name not provided'
+      customer?.full_name ||
+      customer?.username ||
+      'Unknown Customer'
     );
   };
 
   const getCustomerEmail = (userId: string) => {
-    return (
-      customerProfiles[userId]?.email ||
-      'Email not available'
-    );
+    return customerProfiles[userId]?.email || 'No email provided';
   };
 
   const getCustomerContact = (userId: string) => {
     return (
       customerProfiles[userId]?.contact_number ||
-      'Contact number not provided'
+      'No contact number'
     );
   };
 
-  const formatStatus = (status: string) =>
-    status
-      .replace(/_/g, ' ')
-      .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  // STATUS COLORS
+  const getStatusStyle = (status: string) => {
+    switch (normalizeProgress(status)) {
+      case 'submitted':
+        return styles.statusPending;
 
-  const formatMoney = (amount: number) =>
-    `₱${Number(amount).toLocaleString('en-PH', {
+      case 'under_review':
+        return styles.statusReview;
+
+      case 'quotation_sent':
+        return styles.statusQuoted;
+
+      case 'accepted':
+        return styles.statusAccepted;
+
+      case 'declined':
+      case 'cancelled':
+        return styles.statusDeclined;
+
+      case 'completed':
+        return styles.statusCompleted;
+
+      case 'in_production':
+      case 'assigned':
+      case 'cutting':
+      case 'sewing':
+        return styles.statusProduction;
+
+      case 'ready_for_fitting':
+      case 'fitting':
+      case 'finishing':
+        return styles.statusFitting;
+
+      case 'ready_for_release':
+      case 'ready_for_pickup':
+        return styles.statusReady;
+
+      default:
+        return styles.statusPending;
+    }
+  };
+
+  // FORMAT MONEY
+  const formatMoney = (amount: number | null) => {
+    if (amount === null || amount === undefined) {
+      return 'Not set';
+    }
+
+    return `₱${Number(amount).toLocaleString('en-PH', {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     })}`;
+  };
 
-  const openReviewRequest = (order: CustomOrder) => {
-    navigation.navigate('ReviewRequest', {
-      order: {
-        id: order.id,
-        user_id: order.user_id,
-        reference_image_url: order.reference_image_url,
-        garment_description: order.garment_description,
-        special_instructions: order.special_instructions,
-        preferred_color: order.preferred_color,
-        fabric_preference: order.fabric_preference,
-        needed_by_date: order.needed_by_date,
-        status: order.status,
-        quoted_price: order.quoted_price,
-        deposit_amount: order.deposit_amount,
-        quotation_note: order.quotation_note,
-        estimated_completion_date: order.estimated_completion_date,
-        created_at: order.created_at,
-      },
+  // FORMAT DATE
+  const formatDate = (date: string | null) => {
+    if (!date) return 'Not specified';
+
+    return new Date(date).toLocaleString('en-PH', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
     });
   };
 
-  const openManageOrder = (orderId: string) => {
+  // NAVIGATION
+  const openReviewRequest = (order: CustomOrder) => {
+    navigation.navigate('ReviewRequest', { order });
+  };
+
+  const openManageOrder = (order: CustomOrder) => {
     navigation.navigate('ManageOrder', {
-      orderId,
+      orderId: order.id,
       orderType: 'custom',
     });
   };
 
+  // FILTER ORDERS
   const filteredOrders = orders.filter((order) => {
-    if (filter === 'All') {
-      return true;
-    }
+    const matchesFilterResult = matchesOrderFilter(
+      order.status,
+      filter
+    );
 
-    if (filter === 'Needs Quote') {
-      return ['submitted', 'under_review'].includes(order.status);
-    }
+    // PRODUCTION PROGRESS FILTER
+    const productionStatus = normalizeProgress(
+      productionProgress[order.id]?.status
+    );
 
-    if (filter === 'Quoted') {
-      return ['quoted', 'quotation_sent'].includes(order.status);
-    }
+    const matchesProgressFilter =
+      progressFilter === 'All' ||
+      productionStatus === normalizeProgress(progressFilter);
 
-    return order.status === filter.toLowerCase();
+    // SEARCH FILTER
+    const customer = customerProfiles[order.user_id];
+    const search = searchQuery.trim().toLowerCase();
+
+    const matchesSearch =
+      !search ||
+      order.id.toLowerCase().includes(search) ||
+      order.id.slice(0, 8).toLowerCase().includes(search) ||
+      order.garment_description.toLowerCase().includes(search) ||
+      (order.special_instructions || '').toLowerCase().includes(search) ||
+      (order.preferred_color || '').toLowerCase().includes(search) ||
+      (order.fabric_preference || '').toLowerCase().includes(search) ||
+      (customer?.full_name || '').toLowerCase().includes(search) ||
+      (customer?.username || '').toLowerCase().includes(search) ||
+      (customer?.email || '').toLowerCase().includes(search) ||
+      (customer?.contact_number || '').toLowerCase().includes(search) ||
+      formatStatus(order.status).toLowerCase().includes(search) ||
+      formatStatus(
+        productionProgress[order.id]?.status || ''
+      )
+        .toLowerCase()
+        .includes(search);
+
+    return (
+      matchesFilterResult &&
+      matchesProgressFilter &&
+      matchesSearch
+    );
   });
 
-  const renderCustomerDetails = (userId: string) => (
-    <View style={styles.customerBox}>
-      <View style={styles.customerHeading}>
-        <View style={styles.customerIcon}>
-          <Ionicons
-            name="person"
-            size={21}
-            color={PINK}
-          />
-        </View>
+  // NEEDS REVIEW COUNT
+  const needsQuoteCount = orders.filter((order) => {
+    const status = normalizeStatus(order.status);
 
-        <View style={{ flex: 1 }}>
-          <Text style={styles.customerName}>
-            {getCustomerName(userId)}
-          </Text>
+    return (
+      status === 'submitted' ||
+      status === 'under review'
+    );
+  }).length;
 
-          <Text style={styles.customerCaption}>
-            Customer Details
-          </Text>
-        </View>
-      </View>
-
-      <View style={styles.detailRow}>
-        <Ionicons
-          name="mail-outline"
-          size={17}
-          color="#9a6477"
-        />
-
-        <Text style={styles.detailText}>
-          {getCustomerEmail(userId)}
-        </Text>
-      </View>
-
-      <View style={styles.detailRow}>
-        <Ionicons
-          name="call-outline"
-          size={17}
-          color="#9a6477"
-        />
-
-        <Text style={styles.detailText}>
-          {getCustomerContact(userId)}
-        </Text>
-      </View>
-    </View>
-  );
+  // ORDERS THAT CAN BE MANAGED
+  // Assignment and production eligibility are still checked
+  // inside ManageOrderScreen.
+  const manageableStatuses = [
+    'accepted',
+    'in_production',
+    'ready_for_fitting',
+    'ready_for_release',
+  ];
 
   if (loading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator
-          size="large"
-          color={PINK}
-        />
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={PINK} />
 
         <Text style={styles.loadingText}>
           Loading custom orders...
@@ -266,283 +474,423 @@ export default function ManageOrdersScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Heading with Total Order Count */}
-      <View style={styles.header}>
-        <View style={styles.headingIcon}>
-          <Ionicons
-            name="cut-outline"
-            size={25}
-            color={PINK}
+      <View style={styles.topSection}>
+        <View style={styles.headingRow}>
+          <View>
+            <Text style={styles.sectionTitle}>
+              Custom Orders
+            </Text>
+
+            <Text style={styles.orderCount}>
+              {filteredOrders.length} of {orders.length} orders
+              {needsQuoteCount > 0
+                ? `  ·  ${needsQuoteCount} need review`
+                : ''}
+            </Text>
+          </View>
+        </View>
+
+        {/* SEARCH */}
+        <View style={styles.searchContainer}>
+          <Text style={styles.searchIcon}>⌕</Text>
+
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search customer, order ID, or garment..."
+            placeholderTextColor="#A9959D"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCapitalize="none"
+            returnKeyType="search"
           />
+
+          {searchQuery.length > 0 && (
+            <TouchableOpacity
+              onPress={() => setSearchQuery('')}
+              style={styles.clearButton}
+            >
+              <Text style={styles.clearSearch}>×</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
-        <View style={styles.headingText}>
-          <Text style={styles.heading}>Custom Orders</Text>
+        {/* CUSTOM ORDER STATUS FILTERS */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filterContainer}
+        >
+          {FILTERS.map((item) => {
+            const selected = filter === item;
 
-          <Text style={styles.subtitle}>
-            Review requests and manage custom garment orders.
+            return (
+              <TouchableOpacity
+                key={item}
+                style={[
+                  styles.filterButton,
+                  selected && styles.filterButtonActive,
+                ]}
+                onPress={() => setFilter(item)}
+                activeOpacity={0.8}
+              >
+                <Text
+                  style={[
+                    styles.filterText,
+                    selected && styles.filterTextActive,
+                  ]}
+                >
+                  {item}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+
+        {/* PRODUCTION PROGRESS FILTERS */}
+        <View style={styles.progressHeader}>
+          <Text style={styles.progressTitle}>
+            Production Progress
           </Text>
         </View>
 
-        <View style={styles.totalCountBadge}>
-          <Text style={styles.totalCountNumber}>
-            {orders.length}
-          </Text>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.progressFilterContainer}
+        >
+          {PROGRESS_FILTERS.map((item) => {
+            const selected = progressFilter === item;
 
-          <Text style={styles.totalCountLabel}>
-            Total Orders
-          </Text>
-        </View>
+            const label =
+              item === 'All'
+                ? 'All'
+                : formatStatus(item);
+
+            return (
+              <TouchableOpacity
+                key={item}
+                style={[
+                  styles.progressFilterButton,
+                  selected &&
+                    styles.progressFilterButtonActive,
+                ]}
+                onPress={() => setProgressFilter(item)}
+                activeOpacity={0.8}
+              >
+                <Text
+                  style={[
+                    styles.progressFilterText,
+                    selected &&
+                      styles.progressFilterTextActive,
+                  ]}
+                >
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
       </View>
 
-      {/* Filters */}
+      {/* ORDERS LIST */}
       <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.filterScroll}
-        contentContainerStyle={styles.filterContainer}
-      >
-        {[
-          'All',
-          'Needs Quote',
-          'Quoted',
-          'accepted',
-          'declined',
-          'completed',
-        ].map((item) => (
-          <TouchableOpacity
-            key={item}
-            style={[
-              styles.filterButton,
-              filter === item && styles.activeFilter,
-            ]}
-            onPress={() => setFilter(item)}
-          >
-            <Text
-              style={[
-                styles.filterText,
-                filter === item && styles.activeFilterText,
-              ]}
-            >
-              {[
-                'accepted',
-                'declined',
-                'completed',
-              ].includes(item)
-                ? formatStatus(item)
-                : item}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      {/* Orders List */}
-      <ScrollView
-        style={styles.orderList}
+        style={styles.listScroll}
         contentContainerStyle={styles.listContent}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            onRefresh={() => {
-              setRefreshing(true);
-              loadOrders(false);
-            }}
+            onRefresh={handleRefresh}
             tintColor={PINK}
+            colors={[PINK]}
           />
         }
+        showsVerticalScrollIndicator={false}
       >
         {filteredOrders.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Ionicons
-              name="file-tray-outline"
-              size={48}
-              color="#c5a3ae"
-            />
-
+          <View style={styles.emptyContainer}>
             <Text style={styles.emptyTitle}>
-              No Custom Orders
+              {searchQuery ||
+              filter !== 'All' ||
+              progressFilter !== 'All'
+                ? 'No matching orders'
+                : 'No custom orders yet'}
             </Text>
 
             <Text style={styles.emptyText}>
-              Orders matching this filter will appear here.
+              {searchQuery ||
+              filter !== 'All' ||
+              progressFilter !== 'All'
+                ? 'Try changing your search or filters.'
+                : 'Customer custom requests will appear here.'}
             </Text>
+
+            {(searchQuery.length > 0 ||
+              filter !== 'All' ||
+              progressFilter !== 'All') && (
+              <TouchableOpacity
+                style={styles.clearFiltersButton}
+                onPress={() => {
+                  setSearchQuery('');
+                  setFilter('All');
+                  setProgressFilter('All');
+                }}
+              >
+                <Text style={styles.clearFiltersText}>
+                  Clear Search and Filters
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : (
-          filteredOrders.map((order) => (
-            <View
-              key={order.id}
-              style={styles.orderCard}
-            >
-              {/* Order Header */}
-              <View style={styles.cardTop}>
-                <View style={styles.orderIcon}>
-                  <Ionicons
-                    name="shirt-outline"
-                    size={20}
-                    color={DARK_PINK}
-                  />
-                </View>
+          <View
+            style={[
+              styles.ordersGrid,
+              isLargeScreen && styles.ordersGridLarge,
+            ]}
+          >
+            {filteredOrders.map((order) => {
+              const orderStatus = normalizeProgress(
+                order.status
+              );
 
-                <View style={styles.orderTitleArea}>
-                  <Text
-                    style={styles.orderTitle}
-                    numberOfLines={2}
-                  >
-                    {order.garment_description}
-                  </Text>
+              const canManageOrder =
+                manageableStatuses.includes(orderStatus);
 
-                  <Text style={styles.orderId}>
-                    #{order.id.slice(0, 8).toUpperCase()}
-                  </Text>
-                </View>
+              const currentProgress =
+                productionProgress[order.id]?.status || null;
 
-                <View style={styles.statusBadge}>
-                  <Text style={styles.statusText}>
-                    {formatStatus(order.status)}
-                  </Text>
-                </View>
-              </View>
-
-              {/* Submission Date */}
-              <View style={styles.dateRow}>
-                <Ionicons
-                  name="calendar-outline"
-                  size={15}
-                  color="#9B7784"
-                />
-
-                <Text style={styles.dateText}>
-                  Submitted:{' '}
-                  {new Date(order.created_at).toLocaleDateString(
-                    'en-PH',
-                    {
-                      year: 'numeric',
-                      month: 'short',
-                      day: 'numeric',
-                    }
-                  )}
-                </Text>
-              </View>
-
-              {/* Customer Details */}
-              {renderCustomerDetails(order.user_id)}
-
-              {/* Order Preferences */}
-              <View style={styles.preferenceBox}>
-                <Text style={styles.preferenceTitle}>
-                  Order Preferences
-                </Text>
-
-                <Text style={styles.preferenceText}>
-                  Color: {order.preferred_color || 'Not specified'}
-                </Text>
-
-                <Text style={styles.preferenceText}>
-                  Fabric: {order.fabric_preference || 'Not specified'}
-                </Text>
-
-                <Text style={styles.preferenceText}>
-                  Needed by:{' '}
-                  {order.needed_by_date
-                    ? new Date(
-                        `${order.needed_by_date}T12:00:00`
-                      ).toLocaleDateString('en-PH')
-                    : 'Not specified'}
-                </Text>
-              </View>
-
-              {/* Quotation */}
-              {order.quoted_price != null && (
-                <View style={styles.priceRow}>
-                  <Text style={styles.priceLabel}>
-                    Total Quotation
-                  </Text>
-
-                  <Text style={styles.priceValue}>
-                    {formatMoney(order.quoted_price)}
-                  </Text>
-                </View>
-              )}
-
-              {/* Accepted Notice */}
-              {order.status === 'accepted' && (
-                <View style={styles.decisionNotice}>
-                  <Ionicons
-                    name="checkmark-circle"
-                    size={19}
-                    color="#238052"
-                  />
-
-                  <Text style={styles.decisionText}>
-                    Customer accepted the quotation. Ready for the next step.
-                  </Text>
-                </View>
-              )}
-
-              {/* Declined Notice */}
-              {order.status === 'declined' && (
-                <View style={styles.declinedNotice}>
-                  <Ionicons
-                    name="close-circle"
-                    size={19}
-                    color="#b44e70"
-                  />
-
-                  <Text style={styles.declinedText}>
-                    Customer declined the quotation.
-                  </Text>
-                </View>
-              )}
-
-              {/* Review Request */}
-              <TouchableOpacity
-                style={styles.reviewButton}
-                onPress={() => openReviewRequest(order)}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name="eye-outline"
-                  size={18}
-                  color="#fff"
-                />
-
-                <Text style={styles.buttonText}>
-                  Review Request
-                </Text>
-
-                <Ionicons
-                  name="chevron-forward"
-                  size={17}
-                  color="#fff"
-                />
-              </TouchableOpacity>
-
-              {/* Manage Order - Accepted Custom Orders */}
-              {order.status === 'accepted' && (
-                <TouchableOpacity
-                  style={styles.manageOrderButton}
-                  onPress={() => openManageOrder(order.id)}
-                  activeOpacity={0.8}
+              return (
+                <View
+                  key={order.id}
+                  style={styles.orderCard}
                 >
-                  <Ionicons
-                    name="settings-outline"
-                    size={18}
-                    color="#fff"
-                  />
+                  <View style={styles.cardHeader}>
+                    <View style={styles.cardTitleContainer}>
+                      <Text
+                        style={styles.garmentTitle}
+                        numberOfLines={2}
+                      >
+                        {order.garment_description}
+                      </Text>
 
-                  <Text style={styles.buttonText}>
-                    Manage Order
+                      <Text style={styles.orderId}>
+                        Order ID: {order.id}
+                      </Text>
+                    </View>
+
+                    <View
+                      style={[
+                        styles.statusBadge,
+                        getStatusStyle(order.status),
+                      ]}
+                    >
+                      <Text style={styles.statusText}>
+                        {formatStatus(order.status)}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <Text style={styles.submittedDate}>
+                    Submitted {formatDate(order.created_at)}
                   </Text>
 
-                  <Ionicons
-                    name="chevron-forward"
-                    size={17}
-                    color="#fff"
-                  />
-                </TouchableOpacity>
-              )}
-            </View>
-          ))
+                  {/* CURRENT PRODUCTION STAGE */}
+                  <View style={styles.productionProgressBox}>
+                    <Text style={styles.progressCardLabel}>
+                      Production Progress
+                    </Text>
+
+                    <Text
+                      style={[
+                        styles.progressCardValue,
+                        currentProgress
+                          ? getStatusStyle(currentProgress)
+                          : styles.progressNotStarted,
+                      ]}
+                    >
+                      {currentProgress
+                        ? formatStatus(currentProgress)
+                        : 'Not Started'}
+                    </Text>
+                  </View>
+
+                  <View style={styles.divider} />
+
+                  {/* CUSTOMER */}
+                  <Text style={styles.infoLabel}>
+                    Customer
+                  </Text>
+
+                  <Text style={styles.infoValue}>
+                    {getCustomerName(order.user_id)}
+                  </Text>
+
+                  <Text style={styles.contactText}>
+                    {getCustomerEmail(order.user_id)}
+                  </Text>
+
+                  <Text style={styles.contactText}>
+                    {getCustomerContact(order.user_id)}
+                  </Text>
+
+                  {/* ORDER DETAILS */}
+                  <View style={styles.detailsGrid}>
+                    {order.preferred_color ? (
+                      <View style={styles.detailItem}>
+                        <Text style={styles.infoLabel}>
+                          Preferred Color
+                        </Text>
+
+                        <Text style={styles.infoValue}>
+                          {order.preferred_color}
+                        </Text>
+                      </View>
+                    ) : null}
+
+                    {order.fabric_preference ? (
+                      <View style={styles.detailItem}>
+                        <Text style={styles.infoLabel}>
+                          Fabric Preference
+                        </Text>
+
+                        <Text style={styles.infoValue}>
+                          {order.fabric_preference}
+                        </Text>
+                      </View>
+                    ) : null}
+
+                    {order.needed_by_date ? (
+                      <View style={styles.detailItem}>
+                        <Text style={styles.infoLabel}>
+                          Needed By
+                        </Text>
+
+                        <Text style={styles.infoValue}>
+                          {formatDate(order.needed_by_date)}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
+
+                  {/* QUOTATION */}
+                  {order.quoted_price !== null && (
+                    <View style={styles.quotationBox}>
+                      <View style={styles.quotationRow}>
+                        <Text style={styles.quotationLabel}>
+                          Quoted Total
+                        </Text>
+
+                        <Text style={styles.quotationValue}>
+                          {formatMoney(order.quoted_price)}
+                        </Text>
+                      </View>
+
+                      {order.deposit_amount !== null && (
+                        <View style={styles.quotationRow}>
+                          <Text style={styles.quotationLabel}>
+                            Required Deposit
+                          </Text>
+
+                          <Text style={styles.quotationValue}>
+                            {formatMoney(order.deposit_amount)}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  )}
+
+                  {/* STATUS NOTICES */}
+
+                  {orderStatus === 'submitted' && (
+                    <Text style={styles.productionNotice}>
+                      Custom order request has been submitted and
+                      needs review.
+                    </Text>
+                  )}
+
+                  {orderStatus === 'under_review' && (
+                    <Text style={styles.productionNotice}>
+                      Custom order request is currently under
+                      review.
+                    </Text>
+                  )}
+
+                  {orderStatus === 'quotation_sent' && (
+                    <Text style={styles.acceptedNotice}>
+                      Quotation has been sent to the customer.
+                    </Text>
+                  )}
+
+                  {orderStatus === 'accepted' && (
+                    <Text style={styles.acceptedNotice}>
+                      Customer accepted the quotation.
+                    </Text>
+                  )}
+
+                  {orderStatus === 'in_production' && (
+                    <Text style={styles.productionNotice}>
+                      Order is currently in production.
+                    </Text>
+                  )}
+
+                  {orderStatus === 'ready_for_fitting' && (
+                    <Text style={styles.fittingNotice}>
+                      Garment is ready for customer fitting.
+                    </Text>
+                  )}
+
+                  {orderStatus === 'ready_for_release' && (
+                    <Text style={styles.readyNotice}>
+                      Order is ready for customer pickup.
+                    </Text>
+                  )}
+
+                  {orderStatus === 'completed' && (
+                    <Text style={styles.acceptedNotice}>
+                      Customer has received the finished garment.
+                    </Text>
+                  )}
+
+                  {orderStatus === 'declined' && (
+                    <Text style={styles.declinedNotice}>
+                      This custom order has been declined.
+                    </Text>
+                  )}
+
+                  {orderStatus === 'cancelled' && (
+                    <Text style={styles.declinedNotice}>
+                      This order has been cancelled.
+                    </Text>
+                  )}
+
+                  {/* ACTIONS */}
+                  <View style={styles.actionsContainer}>
+                    <TouchableOpacity
+                      style={styles.reviewButton}
+                      onPress={() => openReviewRequest(order)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.reviewButtonText}>
+                        Review Request
+                      </Text>
+                    </TouchableOpacity>
+
+                    {canManageOrder && (
+                      <TouchableOpacity
+                        style={styles.manageButton}
+                        onPress={() => openManageOrder(order)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.manageButtonText}>
+                          Manage Order
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </View>
+              );
+            })}
+          </View>
         )}
       </ScrollView>
     </View>
@@ -552,364 +900,456 @@ export default function ManageOrdersScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFF8FA',
-    paddingTop: 12,
+    backgroundColor: BACKGROUND,
   },
 
-  center: {
+  loadingContainer: {
     flex: 1,
-    justifyContent: 'center',
+    backgroundColor: BACKGROUND,
     alignItems: 'center',
-    backgroundColor: '#FFF8FA',
+    justifyContent: 'center',
   },
 
   loadingText: {
-    marginTop: 12,
-    color: '#8C6674',
+    color: TEXT_MUTED,
+    fontSize: 12,
+    marginTop: 10,
   },
 
-  header: {
+  topSection: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 4,
+    backgroundColor: BACKGROUND,
+  },
+
+  headingRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    marginBottom: 14,
+    justifyContent: 'space-between',
+    marginBottom: 8,
   },
 
-  headingIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: 14,
-    backgroundColor: '#FCE7F0',
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: TEXT_DARK,
+  },
+
+  orderCount: {
+    fontSize: 10,
+    color: TEXT_MUTED,
+    marginTop: 2,
+  },
+
+  searchContainer: {
+    height: 39,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#F0DFE5',
+    borderRadius: 9,
+    paddingHorizontal: 10,
+    marginBottom: 7,
   },
 
-  headingText: {
-    flex: 1,
-    marginLeft: 10,
-  },
-
-  heading: {
+  searchIcon: {
     fontSize: 20,
-    fontWeight: '800',
-    color: '#3F2630',
+    color: TEXT_MUTED,
+    marginRight: 7,
   },
 
-  subtitle: {
-    color: '#8C6674',
-    fontSize: 11,
-    marginTop: 3,
+  searchInput: {
+    flex: 1,
+    fontSize: 12,
+    color: TEXT_DARK,
+    paddingVertical: 0,
   },
 
-  totalCountBadge: {
-    backgroundColor: '#FCE7F0',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 8,
+  clearButton: {
+    paddingHorizontal: 4,
   },
 
-  totalCountNumber: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: DARK_PINK,
-  },
-
-  totalCountLabel: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#8B3455',
-  },
-
-  filterScroll: {
-    maxHeight: 46,
-    flexGrow: 0,
+  clearSearch: {
+    fontSize: 21,
+    color: TEXT_MUTED,
   },
 
   filterContainer: {
-    paddingHorizontal: 16,
-    paddingBottom: 8,
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
+    paddingBottom: 5,
   },
 
   filterButton: {
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 22,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#F0D9E2',
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 7,
+    backgroundColor: '#F5E9EE',
   },
 
-  activeFilter: {
+  filterButtonActive: {
     backgroundColor: PINK,
-    borderColor: PINK,
   },
 
   filterText: {
-    color: '#805C69',
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '600',
+    color: TEXT_MUTED,
   },
 
-  activeFilterText: {
+  filterTextActive: {
     color: '#FFFFFF',
+    fontWeight: '700',
   },
 
-  orderList: {
+  progressHeader: {
+    marginTop: 2,
+    marginBottom: 4,
+  },
+
+  progressTitle: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: TEXT_MUTED,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+
+  progressFilterContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingBottom: 5,
+  },
+
+  progressFilterButton: {
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 7,
+    backgroundColor: '#F5E9EE',
+  },
+
+  progressFilterButtonActive: {
+    backgroundColor: DARK_PINK,
+  },
+
+  progressFilterText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: TEXT_MUTED,
+  },
+
+  progressFilterTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+
+  listScroll: {
     flex: 1,
   },
 
   listContent: {
     paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 35,
+    paddingTop: 7,
+    paddingBottom: 25,
+  },
+
+  ordersGrid: {
+    width: '100%',
+  },
+
+  ordersGridLarge: {
+    maxWidth: 900,
+    alignSelf: 'center',
+    width: '100%',
   },
 
   orderCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 17,
-    padding: 15,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: '#F3E3E9',
-  },
-
-  cardTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 9,
-  },
-
-  orderIcon: {
-    width: 39,
-    height: 39,
     borderRadius: 12,
-    backgroundColor: '#FCE7F0',
-    alignItems: 'center',
-    justifyContent: 'center',
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#F1E3E8',
   },
 
-  orderTitleArea: {
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+
+  cardTitleContainer: {
     flex: 1,
   },
 
-  orderTitle: {
+  garmentTitle: {
     fontSize: 14,
     fontWeight: '800',
-    color: '#3F2630',
+    color: TEXT_DARK,
   },
 
   orderId: {
-    color: '#9B7784',
     fontSize: 10,
+    color: TEXT_MUTED,
     marginTop: 3,
   },
 
   statusBadge: {
-    backgroundColor: '#FCE7F0',
-    paddingHorizontal: 9,
-    paddingVertical: 6,
-    borderRadius: 18,
-    maxWidth: 105,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 6,
   },
 
   statusText: {
-    color: DARK_PINK,
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '700',
+    color: TEXT_DARK,
   },
 
-  dateRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-    marginTop: 12,
+  statusPending: {
+    backgroundColor: '#FFF1D6',
   },
 
-  dateText: {
-    color: '#9B7784',
-    fontSize: 11,
+  statusReview: {
+    backgroundColor: '#E8EFFF',
   },
 
-  customerBox: {
-    backgroundColor: '#FFF8FA',
-    borderWidth: 1,
-    borderColor: '#F1DCE4',
-    borderRadius: 12,
-    padding: 12,
-    marginTop: 13,
+  statusQuoted: {
+    backgroundColor: '#F4E9FF',
   },
 
-  customerHeading: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
+  statusAccepted: {
+    backgroundColor: '#E2F5E9',
   },
 
-  customerIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: '#FFEAF1',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 10,
+  statusDeclined: {
+    backgroundColor: '#FCE7E7',
   },
 
-  customerName: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#3F2630',
+  statusCompleted: {
+    backgroundColor: '#E3F2F2',
   },
 
-  customerCaption: {
-    fontSize: 11,
-    color: '#98727F',
-    marginTop: 2,
+  statusProduction: {
+    backgroundColor: '#FFF0D8',
   },
 
-  detailRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
+  statusFitting: {
+    backgroundColor: '#EDE7FF',
+  },
+
+  statusReady: {
+    backgroundColor: '#E3F5EA',
+  },
+
+  submittedDate: {
+    fontSize: 10,
+    color: TEXT_MUTED,
     marginTop: 7,
   },
 
-  detailText: {
-    flex: 1,
-    color: '#66545B',
-    fontSize: 12,
-    lineHeight: 18,
-  },
-
-  preferenceBox: {
-    backgroundColor: '#FFFAFC',
-    borderWidth: 1,
-    borderColor: '#F1EAEC',
-    borderRadius: 12,
-    padding: 12,
-    marginTop: 12,
-  },
-
-  preferenceTitle: {
-    color: '#3F2630',
-    fontSize: 12,
-    fontWeight: 'bold',
-    marginBottom: 7,
-  },
-
-  preferenceText: {
-    color: '#66545B',
-    fontSize: 12,
-    lineHeight: 20,
-  },
-
-  priceRow: {
+  productionProgressBox: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 13,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#F1EAEC',
-  },
-
-  priceLabel: {
-    color: '#666',
-    fontSize: 13,
-  },
-
-  priceValue: {
-    color: '#238052',
-    fontSize: 15,
-    fontWeight: 'bold',
-  },
-
-  decisionNotice: {
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#EAF8EF',
-    padding: 11,
-    borderRadius: 9,
+    backgroundColor: '#FFF6F9',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 7,
+    marginTop: 10,
+  },
+
+  progressCardLabel: {
+    fontSize: 10,
+    color: TEXT_MUTED,
+    fontWeight: '600',
+  },
+
+  progressCardValue: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: TEXT_DARK,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 5,
+    overflow: 'hidden',
+  },
+
+  progressNotStarted: {
+    backgroundColor: '#F1E7EB',
+    color: TEXT_MUTED,
+  },
+
+  divider: {
+    height: 1,
+    backgroundColor: '#F1E7EB',
+    marginVertical: 10,
+  },
+
+  infoLabel: {
+    fontSize: 10,
+    color: TEXT_MUTED,
+    marginBottom: 3,
+  },
+
+  infoValue: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: TEXT_DARK,
+  },
+
+  contactText: {
+    fontSize: 10,
+    color: TEXT_MUTED,
+    marginTop: 3,
+  },
+
+  detailsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 14,
     marginTop: 12,
   },
 
-  decisionText: {
+  detailItem: {
+    minWidth: '40%',
     flex: 1,
-    color: '#237346',
-    fontSize: 12,
-    lineHeight: 18,
+  },
+
+  quotationBox: {
+    backgroundColor: '#FFF6F9',
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 12,
+    gap: 7,
+  },
+
+  quotationRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+
+  quotationLabel: {
+    fontSize: 10,
+    color: TEXT_MUTED,
+  },
+
+  quotationValue: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: TEXT_DARK,
+  },
+
+  acceptedNotice: {
+    color: '#398253',
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 10,
   },
 
   declinedNotice: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#FFF0F4',
-    padding: 11,
-    borderRadius: 9,
-    marginTop: 12,
+    color: '#B84444',
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 10,
   },
 
-  declinedText: {
-    flex: 1,
-    color: '#A33D61',
-    fontSize: 12,
-    lineHeight: 18,
+  productionNotice: {
+    color: '#A66A18',
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 10,
+  },
+
+  fittingNotice: {
+    color: '#7256A8',
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 10,
+  },
+
+  readyNotice: {
+    color: '#398253',
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 10,
+  },
+
+  actionsContainer: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 13,
   },
 
   reviewButton: {
-    backgroundColor: '#D96B8A',
-    borderRadius: 11,
-    padding: 13,
-    marginTop: 14,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 9,
-  },
-
-  manageOrderButton: {
-    backgroundColor: DARK_PINK,
-    borderRadius: 11,
-    padding: 13,
-    marginTop: 9,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 9,
-  },
-
-  buttonText: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: '800',
     flex: 1,
-    textAlign: 'center',
+    backgroundColor: PINK,
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
-  emptyState: {
+  reviewButtonText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+
+  manageButton: {
+    flex: 1,
+    backgroundColor: '#F7EAF0',
+    paddingVertical: 10,
+    borderRadius: 8,
     alignItems: 'center',
-    paddingVertical: 45,
+    justifyContent: 'center',
+  },
+
+  manageButtonText: {
+    color: DARK_PINK,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+
+  emptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 55,
     paddingHorizontal: 20,
   },
 
   emptyTitle: {
-    fontSize: 17,
-    fontWeight: 'bold',
-    color: '#3F2630',
-    marginTop: 12,
+    fontSize: 15,
+    fontWeight: '800',
+    color: TEXT_DARK,
+    textAlign: 'center',
   },
 
   emptyText: {
-    color: '#888',
+    fontSize: 11,
+    color: TEXT_MUTED,
     textAlign: 'center',
-    marginTop: 7,
-    lineHeight: 20,
-    fontSize: 13,
+    marginTop: 6,
+    lineHeight: 17,
+  },
+
+  clearFiltersButton: {
+    backgroundColor: '#F7EAF0',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 8,
+    marginTop: 14,
+  },
+
+  clearFiltersText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: DARK_PINK,
   },
 });

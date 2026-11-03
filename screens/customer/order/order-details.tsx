@@ -1,4 +1,3 @@
-
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -8,14 +7,16 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 
 import { supabase } from '../../../supabase';
-import { RootStackParamList } from '../../navigator';
+import { RootStackParamList } from '../../../navigator';
 
 type Props = NativeStackScreenProps<
   RootStackParamList,
@@ -78,10 +79,11 @@ type ProductionTracking = {
 
 type PaymentRecord = {
   amount: number | string;
-  status: string;
-  payment_type: string;
-  payment_method: string;
+  status: string | null;
+  payment_type: string | null;
+  payment_method: string | null;
   paid_at: string | null;
+  created_at?: string;
 };
 
 const PINK = '#D96B8A';
@@ -244,11 +246,34 @@ const getUniqueIds = (
   ),
 ];
 
-export default function OrderDetailsScreen({ route }: Props) {
+export default function OrderDetailsScreen({ route, navigation }: Props) {
   const { orderId, orderType } = route.params;
+
+  const { width: screenWidth } = useWindowDimensions();
+
+  const isSmallScreen = screenWidth < 380;
+  const isWideScreen = screenWidth >= 768;
+
+  const responsiveContentStyle = {
+    paddingHorizontal: isSmallScreen ? 12 : 18,
+    maxWidth: isWideScreen ? 850 : undefined,
+    width: '100%' as const,
+    alignSelf: 'center' as const,
+  };
+
+  const referenceImageHeight = Math.min(
+    Math.max(screenWidth * 0.65, 220),
+    380,
+  );
+
+  const designImageHeight = Math.min(
+    Math.max(screenWidth * 0.55, 190),
+    320,
+  );
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   const [customOrder, setCustomOrder] =
     useState<CustomOrder | null>(null);
@@ -259,13 +284,16 @@ export default function OrderDetailsScreen({ route }: Props) {
   const [productionTracking, setProductionTracking] =
     useState<ProductionTracking | null>(null);
 
+  // NEW: Tracks whether a tailor has already been assigned.
+  const [hasTailorAssignment, setHasTailorAssignment] =
+    useState(false);
+
   const [paymentRecords, setPaymentRecords] =
     useState<PaymentRecord[] | null>(null);
 
   const [paymentError, setPaymentError] =
     useState<string | null>(null);
 
-  // Load payment records for either catalog or custom orders.
   const fetchPayments = async (
     currentOrderId: string,
     currentOrderType: 'custom' | 'catalog',
@@ -274,13 +302,14 @@ export default function OrderDetailsScreen({ route }: Props) {
       let paymentQuery = supabase
         .from('payments')
         .select(
-          'amount, status, payment_type, payment_method, paid_at',
-        );
+            'amount, status, payment_type, payment_method, paid_at, created_at',
+        )
+        .order('created_at', { ascending: false });
 
       if (currentOrderType === 'custom') {
         paymentQuery = paymentQuery.eq(
           'custom_order_id',
-          currentOrderId,
+          currentOrderId,   
         );
       } else {
         paymentQuery = paymentQuery.eq(
@@ -377,6 +406,49 @@ export default function OrderDetailsScreen({ route }: Props) {
     }
   };
 
+  // NEW: Checks the tailor_assignments table.
+  const fetchTailorAssignment = async (
+    currentOrderId: string,
+    currentOrderType: 'custom' | 'catalog',
+  ) => {
+    try {
+      let assignmentQuery = supabase
+        .from('tailor_assignments')
+        .select('id');
+
+      if (currentOrderType === 'custom') {
+        assignmentQuery = assignmentQuery.eq(
+          'custom_order_id',
+          currentOrderId,
+        );
+      } else {
+        assignmentQuery = assignmentQuery.eq(
+          'order_id',
+          currentOrderId,
+        );
+      }
+
+      const { data, error } = await assignmentQuery
+        .limit(1)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      setHasTailorAssignment(!!data);
+      return !!data;
+    } catch (error: any) {
+      console.warn(
+        'Unable to check tailor assignment:',
+        error?.message || error,
+      );
+
+      // If the assignment check fails, block cancellation
+      // rather than accidentally allowing an assigned order to be cancelled.
+      setHasTailorAssignment(true);
+      return true;
+    }
+  };
+
   const fetchOrder = useCallback(async () => {
     try {
       const {
@@ -393,6 +465,7 @@ export default function OrderDetailsScreen({ route }: Props) {
       setCustomOrder(null);
       setCatalogOrder(null);
       setProductionTracking(null);
+      setHasTailorAssignment(false);
       setPaymentRecords(null);
       setPaymentError(null);
 
@@ -416,6 +489,7 @@ export default function OrderDetailsScreen({ route }: Props) {
 
         await Promise.all([
           fetchProductionTracking(orderId, 'custom'),
+          fetchTailorAssignment(orderId, 'custom'),
           fetchPayments(orderId, 'custom'),
         ]);
 
@@ -511,6 +585,7 @@ export default function OrderDetailsScreen({ route }: Props) {
 
       await Promise.all([
         fetchProductionTracking(orderId, 'catalog'),
+        fetchTailorAssignment(orderId, 'catalog'),
         fetchPayments(orderId, 'catalog'),
       ]);
 
@@ -653,6 +728,228 @@ export default function OrderDetailsScreen({ route }: Props) {
     }
   }, [orderId, orderType]);
 
+  // Cancel an order only before a tailor is assigned
+  // and before production tracking has started.
+  const cancelOrder = () => {
+    const isCustomOrder = orderType === 'custom';
+
+    Alert.alert(
+      'Cancel Order',
+      isCustomOrder
+        ? 'Are you sure you want to cancel this custom order? This action cannot be undone.'
+        : 'Are you sure you want to cancel this order? This action cannot be undone.',
+      [
+        {
+          text: 'Keep Order',
+          style: 'cancel',
+        },
+        {
+          text: 'Yes, Cancel',
+          style: 'destructive',
+          onPress: async () => {
+            if (cancelling) return;
+
+            setCancelling(true);
+
+            try {
+              const {
+                data: { user },
+                error: userError,
+              } = await supabase.auth.getUser();
+
+              if (userError) throw userError;
+
+              if (!user) {
+                throw new Error('Please log in again.');
+              }
+
+              // Always check the database again before cancelling.
+              // This prevents cancellation using outdated screen data.
+              let trackingQuery = supabase
+                .from('production_tracking')
+                .select('id');
+
+              let assignmentQuery = supabase
+                .from('tailor_assignments')
+                .select('id');
+
+              if (orderType === 'custom') {
+                trackingQuery = trackingQuery.eq(
+                  'custom_order_id',
+                  orderId,
+                );
+
+                assignmentQuery = assignmentQuery.eq(
+                  'custom_order_id',
+                  orderId,
+                );
+              } else {
+                trackingQuery = trackingQuery.eq(
+                  'order_id',
+                  orderId,
+                );
+
+                assignmentQuery = assignmentQuery.eq(
+                  'order_id',
+                  orderId,
+                );
+              }
+
+              const [
+                { data: tracking, error: trackingError },
+                { data: assignment, error: assignmentError },
+              ] = await Promise.all([
+                trackingQuery.limit(1).maybeSingle(),
+                assignmentQuery.limit(1).maybeSingle(),
+              ]);
+
+              if (trackingError) throw trackingError;
+              if (assignmentError) throw assignmentError;
+
+              if (tracking || assignment) {
+                Alert.alert(
+                  'Cancellation Unavailable',
+                  'This order can no longer be cancelled because a tailor has already been assigned or production has started. Please contact the shop for assistance.',
+                );
+
+                await fetchOrder();
+                return;
+              }
+
+              if (orderType === 'custom') {
+                const { data, error } = await supabase
+                  .from('custom_orders')
+                  .update({
+                    status: 'cancelled',
+                  })
+                  .eq('id', orderId)
+                  .eq('user_id', user.id)
+                  .in('status', [
+                    'submitted',
+                    'under_review',
+                    'quotation_sent',
+                    'accepted',
+                  ])
+                  .select('id')
+                  .maybeSingle();
+
+                if (error) throw error;
+
+                if (!data) {
+                  throw new Error(
+                    'This order can no longer be cancelled. Please refresh and check its latest status.',
+                  );
+                }
+              } else {
+                const { data, error } = await supabase
+                  .from('orders')
+                  .update({
+                    status: 'cancelled',
+                  })
+                  .eq('id', orderId)
+                  .eq('customer_id', user.id)
+                  .in('status', ['pending', 'Pending'])
+                  .select('id')
+                  .maybeSingle();
+
+                if (error) throw error;
+
+                if (!data) {
+                  throw new Error(
+                    'This order can no longer be cancelled. Please refresh and check its latest status.',
+                  );
+                }
+              }
+
+              await fetchOrder();
+
+              Alert.alert(
+                'Order Cancelled',
+                isCustomOrder
+                  ? 'Your custom order has been successfully cancelled. If you already made a deposit, please contact the shop regarding your payment.'
+                  : 'Your order has been successfully cancelled.',
+              );
+            } catch (error: any) {
+              console.error('Cancel order error:', error);
+
+              Alert.alert(
+                'Unable to Cancel',
+                error?.message || 'Please try again.',
+              );
+            } finally {
+              setCancelling(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const renderCancelButton = (canCancel: boolean) => {
+    if (!canCancel) return null;
+
+    return (
+      <View style={styles.cancelSection}>
+        <TouchableOpacity
+          style={[
+            styles.cancelButton,
+            cancelling && styles.cancelButtonDisabled,
+          ]}
+          onPress={cancelOrder}
+          disabled={cancelling}
+          activeOpacity={0.8}
+        >
+          {cancelling ? (
+            <ActivityIndicator size="small" color="#B42335" />
+          ) : (
+            <Ionicons
+              name="close-circle-outline"
+              size={19}
+              color="#B42335"
+            />
+          )}
+
+          <Text style={styles.cancelButtonText}>
+            {cancelling ? 'Cancelling...' : 'Cancel Order'}
+          </Text>
+        </TouchableOpacity>
+
+        <Text style={styles.cancelHint}>
+          You can cancel this order before a tailor is assigned or production starts.
+        </Text>
+      </View>
+    );
+  };
+
+  // Cancelled notice without the unnecessary icon.
+  const renderCancelledNotice = () => {
+    const hasPaidPayment =
+      paymentRecords?.some(
+        (payment) =>
+          payment.status?.toLowerCase() === 'paid',
+      ) ?? false;
+
+    return (
+      <View style={styles.cancelledNotice}>
+        <Text style={styles.cancelledNoticeTitle}>
+          Order Cancelled
+        </Text>
+
+        <Text style={styles.cancelledNoticeText}>
+          This order has been cancelled and will not continue to
+          quotation or production.
+        </Text>
+
+        {hasPaidPayment ? (
+          <Text style={styles.cancelledPaymentText}>
+            A payment has already been recorded for this order.
+            Please contact the shop regarding refund handling.
+          </Text>
+        ) : null}
+      </View>
+    );
+  };
+
   useFocusEffect(
     useCallback(() => {
       let active = true;
@@ -672,7 +969,6 @@ export default function OrderDetailsScreen({ route }: Props) {
     }, [fetchOrder]),
   );
 
-  // Listen for production, schedule, and payment updates.
   useEffect(() => {
     const filterColumn =
       orderType === 'custom'
@@ -687,6 +983,23 @@ export default function OrderDetailsScreen({ route }: Props) {
           event: '*',
           schema: 'public',
           table: 'production_tracking',
+          filter: `${filterColumn}=eq.${orderId}`,
+        },
+        () => {
+          void fetchOrder();
+        },
+      )
+      .subscribe();
+
+    // NEW: Listen for tailor assignment changes.
+    const assignmentChannel = supabase
+      .channel(`assignment-${orderType}-${orderId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'tailor_assignments',
           filter: `${filterColumn}=eq.${orderId}`,
         },
         () => {
@@ -732,6 +1045,7 @@ export default function OrderDetailsScreen({ route }: Props) {
 
     return () => {
       void supabase.removeChannel(productionChannel);
+      void supabase.removeChannel(assignmentChannel);
       void supabase.removeChannel(scheduleChannel);
       void supabase.removeChannel(paymentChannel);
     };
@@ -759,7 +1073,6 @@ export default function OrderDetailsScreen({ route }: Props) {
     </View>
   );
 
-  // Payment summary using actual successful payment records.
   const renderPaymentSummary = (
     totalAmount: number | null,
     depositRequired: number | null,
@@ -969,8 +1282,116 @@ export default function OrderDetailsScreen({ route }: Props) {
       </View>
     );
   };
+    const renderDepositAction = (
+        totalAmount: number | null,
+        canPay: boolean,
+    ) => {
+    if (!canPay) return null;
 
-  // Fitting and pickup schedule display.
+    if (paymentError) {
+        return (
+            <View style={styles.depositInfoBox}>
+                <Text style={styles.depositInfoText}>
+                We couldn't verify your payment records. Please refresh
+                before attempting another payment to avoid duplicate charges.
+                </Text>
+            </View>
+        );
+    }
+
+    if (paymentRecords === null) {
+        return (
+            <View style={styles.depositLoading}>
+                <ActivityIndicator size="small" color={PINK} />
+                <Text style={styles.helperText}>
+                Checking payment status...
+                </Text>
+            </View>
+        );
+    }
+
+    const depositPayments = paymentRecords.filter(
+        (payment) =>
+            payment.payment_type?.toLowerCase() === 'deposit',
+    );
+
+    // Never allow another deposit payment if one is already paid.
+    const hasPaidDeposit = depositPayments.some(
+        (payment) => payment.status?.toLowerCase() === 'paid',
+    );
+
+    if (hasPaidDeposit) return null;
+
+    // Use the newest unpaid deposit payment to determine the action.
+    const latestUnpaidDeposit = depositPayments.find(
+        (payment) =>
+            payment.status?.toLowerCase() !== 'paid',
+    );
+
+    const latestStatus =
+        latestUnpaidDeposit?.status?.toLowerCase();
+
+    const isPending = latestStatus === 'pending';
+    const isFailed = latestStatus === 'failed';
+
+    const buttonLabel = isPending
+        ? 'Check Payment'
+        : isFailed
+            ? 'Retry Deposit'
+            : 'Pay Deposit';
+
+    const description = isPending
+        ? 'Your deposit payment is still being processed. Check its status before trying another payment.'
+        : isFailed
+            ? 'Your previous deposit payment failed. You can try making the deposit again.'
+            : 'Your deposit has not been paid yet. Complete your deposit payment to proceed with your order.';
+
+    const validTotal =
+        totalAmount !== null &&
+        Number.isFinite(totalAmount) &&
+        totalAmount > 0;
+
+    if (!validTotal) return null;
+
+    return (
+        <View style={styles.depositActionSection}>
+            <Text style={styles.depositActionTitle}>
+                Deposit Payment
+            </Text>
+
+            <Text style={styles.depositActionDescription}>
+                {description}
+            </Text>
+
+            <TouchableOpacity
+                style={styles.depositButton}
+                activeOpacity={0.8}
+                onPress={() => {
+                    navigation.navigate('Payment', {
+                        orderId,
+                        orderType,
+                        totalAmount,
+                    });
+                }}
+            >
+                <Ionicons
+                name={
+                    isPending
+                        ? 'refresh-circle-outline'
+                        : 'card-outline'
+                }
+                    size={19}
+                    color="#fff"
+                />
+
+                <Text style={styles.depositButtonText}>
+                    {buttonLabel}
+                </Text>
+            </TouchableOpacity>
+        </View>
+    );
+    };
+
   const renderSchedule = (
     fittingDate: string | null,
     pickupDate: string | null,
@@ -1262,10 +1683,23 @@ export default function OrderDetailsScreen({ route }: Props) {
     const hasDeposit =
       deposit !== null && Number.isFinite(deposit);
 
+    const canCancelCustomOrder =
+      [
+        'submitted',
+        'under_review',
+        'quotation_sent',
+        'accepted',
+      ].includes(status) &&
+      !productionTracking &&
+      !hasTailorAssignment;
+
     return (
       <ScrollView
         style={styles.container}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          responsiveContentStyle,
+        ]}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -1299,27 +1733,41 @@ export default function OrderDetailsScreen({ route }: Props) {
           </View>
         </View>
 
-        {/* Shopee-style order tracking at the top */}
-        {renderProgress()}
+        {renderCancelButton(canCancelCustomOrder)}
 
-        {renderSchedule(
-          customOrder.fitting_date,
-          customOrder.pickup_date,
+        {status === 'cancelled' ? (
+          renderCancelledNotice()
+        ) : (
+          <>
+            {renderProgress()}
+
+            {renderSchedule(
+              customOrder.fitting_date,
+              customOrder.pickup_date,
+            )}
+          </>
         )}
 
         {renderPaymentSummary(
-          hasQuote ? quotedPrice : null,
-          hasDeposit ? deposit : null,
+            hasQuote ? quotedPrice : null,
+            hasDeposit ? deposit : null,
         )}
 
+        {renderDepositAction(
+            hasQuote ? quotedPrice : null,
+            status === 'accepted',
+        )}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Reference Image</Text>
 
           {customOrder.signedImageUrl ? (
             <Image
               source={{ uri: customOrder.signedImageUrl }}
-              style={styles.referenceImage}
-              resizeMode="cover"
+              style={[
+                styles.referenceImage,
+                { height: referenceImageHeight },
+              ]}
+              resizeMode="contain"
             />
           ) : (
             <View style={styles.imagePlaceholder}>
@@ -1469,7 +1917,10 @@ export default function OrderDetailsScreen({ route }: Props) {
     return (
       <ScrollView
         style={styles.container}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          responsiveContentStyle,
+        ]}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -1503,17 +1954,35 @@ export default function OrderDetailsScreen({ route }: Props) {
           </View>
         </View>
 
-        {/* Shopee-style order tracking at the top */}
-        {renderProgress()}
+        {renderCancelButton(
+          ['pending', 'Pending'].includes(catalogOrder.status) &&
+            !productionTracking &&
+            !hasTailorAssignment,
+        )}
 
-        {renderSchedule(
-          catalogOrder.fitting_date,
-          catalogOrder.pickup_date,
+        {catalogOrder.status.toLowerCase() === 'cancelled' ? (
+          renderCancelledNotice()
+        ) : (
+          <>
+            {renderProgress()}
+
+            {renderSchedule(
+              catalogOrder.fitting_date,
+              catalogOrder.pickup_date,
+            )}
+          </>
         )}
 
         {renderPaymentSummary(
-          Number.isFinite(catalogTotal) ? catalogTotal : null,
-          null,
+            Number.isFinite(catalogTotal) ? catalogTotal : null,
+            null,
+        )}
+
+        {renderDepositAction(
+            Number.isFinite(catalogTotal) ? catalogTotal : null,
+            !['cancelled', 'completed'].includes(
+                catalogOrder.status.toLowerCase(),
+            ),
         )}
 
         <View style={styles.section}>
@@ -1563,8 +2032,11 @@ export default function OrderDetailsScreen({ route }: Props) {
                 {item.designImageUrl ? (
                   <Image
                     source={{ uri: item.designImageUrl }}
-                    style={styles.designImage}
-                    resizeMode="cover"
+                    style={[
+                      styles.designImage,
+                      { height: designImageHeight },
+                    ]}
+                    resizeMode="contain"
                   />
                 ) : (
                   <View style={styles.designPlaceholder}>
@@ -1625,19 +2097,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF8FA',
   },
   content: {
-    padding: 18,
+    paddingTop: 18,
     paddingBottom: 36,
+    alignSelf: 'center',
+    width: '100%',
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#FFF8FA',
+    padding: 20,
   },
   loadingText: {
     marginTop: 12,
     color: '#777',
     fontSize: 14,
+    textAlign: 'center',
   },
   header: {
     backgroundColor: '#fff',
@@ -1646,11 +2122,13 @@ const styles = StyleSheet.create({
     borderColor: '#F0DFE6',
     padding: 17,
     marginBottom: 15,
+    width: '100%',
   },
   heading: {
     fontSize: 23,
     fontWeight: '800',
     color: DARK_PINK,
+    flexShrink: 1,
   },
   orderNumber: {
     fontSize: 13,
@@ -1663,10 +2141,12 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     paddingVertical: 7,
     paddingHorizontal: 12,
+    maxWidth: '100%',
   },
   statusText: {
     fontSize: 12,
     fontWeight: '800',
+    flexShrink: 1,
   },
   section: {
     backgroundColor: '#fff',
@@ -1675,18 +2155,21 @@ const styles = StyleSheet.create({
     borderColor: '#F0DFE6',
     padding: 15,
     marginBottom: 15,
+    width: '100%',
   },
   sectionTitle: {
     fontSize: 16,
     fontWeight: '800',
     color: DARK_PINK,
     marginBottom: 13,
+    flexShrink: 1,
   },
   detailBox: {
     backgroundColor: '#FFF8FA',
     borderRadius: 10,
     padding: 11,
     marginBottom: 9,
+    width: '100%',
   },
   detailLabel: {
     color: '#888',
@@ -1698,10 +2181,10 @@ const styles = StyleSheet.create({
     color: '#444',
     fontSize: 13,
     lineHeight: 19,
+    flexShrink: 1,
   },
   referenceImage: {
     width: '100%',
-    height: 230,
     borderRadius: 12,
     backgroundColor: '#F5E5EC',
   },
@@ -1718,6 +2201,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'center',
     marginTop: 8,
+    lineHeight: 18,
   },
   estimatedBox: {
     flexDirection: 'row',
@@ -1749,6 +2233,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 19,
     marginTop: 5,
+    flexShrink: 1,
   },
   declineBox: {
     backgroundColor: '#FCE8EA',
@@ -1788,6 +2273,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     marginTop: 9,
+    textAlign: 'center',
   },
   tailorBox: {
     flexDirection: 'row',
@@ -1808,6 +2294,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     marginTop: 3,
+    flexShrink: 1,
   },
   updatedBox: {
     flexDirection: 'row',
@@ -1828,6 +2315,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     marginTop: 4,
+    flexShrink: 1,
   },
   progressRow: {
     flexDirection: 'row',
@@ -1876,6 +2364,7 @@ const styles = StyleSheet.create({
   progressLabel: {
     color: '#999',
     fontSize: 12,
+    flexShrink: 1,
   },
   progressLabelCurrent: {
     color: DARK_PINK,
@@ -1909,6 +2398,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 19,
     marginTop: 5,
+    flexShrink: 1,
   },
   itemCard: {
     backgroundColor: '#FFFAFC',
@@ -1917,23 +2407,24 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 12,
     marginBottom: 13,
+    width: '100%',
   },
   itemTitle: {
     color: DARK_PINK,
     fontSize: 16,
     fontWeight: '800',
     marginBottom: 10,
+    flexShrink: 1,
   },
   designImage: {
     width: '100%',
-    height: 190,
     borderRadius: 10,
     backgroundColor: '#F5E5EC',
     marginBottom: 10,
   },
   designPlaceholder: {
     width: '100%',
-    height: 130,
+    minHeight: 130,
     borderRadius: 10,
     backgroundColor: '#FCE7EF',
     justifyContent: 'center',
@@ -1968,12 +2459,14 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
     marginTop: 5,
+    flexShrink: 1,
   },
   scheduleHint: {
     color: '#999',
     fontSize: 11,
     lineHeight: 17,
     marginTop: 5,
+    flexShrink: 1,
   },
   scheduleNotice: {
     flexDirection: 'row',
@@ -2017,16 +2510,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 10,
     gap: 12,
+    flexWrap: 'wrap',
   },
   paymentLabel: {
     color: '#777',
     fontSize: 12,
     flex: 1,
+    minWidth: 100,
   },
   paymentValue: {
     color: '#444',
     fontSize: 13,
     fontWeight: '700',
+    flexShrink: 1,
+    textAlign: 'right',
   },
   paidValue: {
     color: '#237A4B',
@@ -2054,6 +2551,7 @@ const styles = StyleSheet.create({
     fontSize: 23,
     fontWeight: '800',
     marginTop: 5,
+    flexShrink: 1,
   },
   paymentStatusBadge: {
     alignSelf: 'flex-start',
@@ -2110,6 +2608,8 @@ const styles = StyleSheet.create({
     color: '#237A4B',
     fontSize: 13,
     fontWeight: '800',
+    flexShrink: 1,
+    textAlign: 'right',
   },
   paymentFootnote: {
     color: '#999',
@@ -2137,6 +2637,76 @@ const styles = StyleSheet.create({
     gap: 9,
     paddingVertical: 12,
   },
+
+  // Cancellation styles
+  cancelSection: {
+    backgroundColor: '#fff',
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: '#F0DFE6',
+    padding: 15,
+    marginBottom: 15,
+    width: '100%',
+  },
+  cancelButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#FCE8EA',
+    borderRadius: 10,
+    paddingVertical: 13,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#F2C8CE',
+  },
+  cancelButtonDisabled: {
+    opacity: 0.6,
+  },
+  cancelButtonText: {
+    color: '#B42335',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  cancelHint: {
+    color: '#888',
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 9,
+    lineHeight: 17,
+  },
+
+  // Cancelled order notice
+  cancelledNotice: {
+    width: '100%',
+    backgroundColor: '#F3F3F3',
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: '#DDDDDD',
+    padding: 15,
+    marginBottom: 15,
+  },
+  cancelledNoticeTitle: {
+    color: '#555',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  cancelledNoticeText: {
+    color: '#777',
+    fontSize: 13,
+    lineHeight: 20,
+    marginTop: 7,
+    flexShrink: 1,
+  },
+  cancelledPaymentText: {
+    color: '#946200',
+    fontSize: 12,
+    lineHeight: 19,
+    marginTop: 10,
+    fontWeight: '600',
+    flexShrink: 1,
+  },
+
   emptyContainer: {
     flex: 1,
     backgroundColor: '#FFF8FA',
@@ -2150,5 +2720,61 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginTop: 12,
     marginBottom: 8,
+    textAlign: 'center',
   },
+
+    depositActionSection: {
+        backgroundColor: '#fff',
+        borderRadius: 15,
+        borderWidth: 1,
+        borderColor: '#F0DFE6',
+        padding: 15,
+        marginBottom: 15,
+        width: '100%',
+    },
+    depositActionTitle: {
+        color: DARK_PINK,
+        fontSize: 16,
+        fontWeight: '800',
+        marginBottom: 7,
+    },
+    depositActionDescription: {
+        color: '#777',
+        fontSize: 12,
+        lineHeight: 19,
+        marginBottom: 13,
+    },
+    depositButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 9,
+        backgroundColor: PINK,
+        borderRadius: 10,
+        paddingVertical: 14,
+        paddingHorizontal: 15,
+    },
+    depositButtonText: {
+        color: '#fff',
+        fontSize: 14,
+        fontWeight: '800',
+    },
+    depositInfoBox: {
+        backgroundColor: '#FFF3CD',
+        borderRadius: 10,
+        padding: 12,
+        marginBottom: 15,
+    },
+    depositInfoText: {
+        color: '#946200',
+        fontSize: 12,
+        lineHeight: 18,
+    },
+    depositLoading: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 9,
+        padding: 12,
+        marginBottom: 15,
+    },
 });

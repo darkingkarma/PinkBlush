@@ -1,3 +1,4 @@
+
 import {
   StyleSheet,
   Text,
@@ -5,29 +6,24 @@ import {
   View,
   ScrollView,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
-
-import { Ionicons } from '@expo/vector-icons';
 
 import {
   CompositeScreenProps,
+  useFocusEffect,
 } from '@react-navigation/native';
 
-import {
-  BottomTabScreenProps,
-} from '@react-navigation/bottom-tabs';
-
-import {
-  NativeStackScreenProps,
-} from '@react-navigation/native-stack';
+import { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
+import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import {
   MainTabParamList,
   RootStackParamList,
-} from '../../navigator';
+} from '../../../navigator';
 
 import {
-  useEffect,
+  useCallback,
   useState,
 } from 'react';
 
@@ -41,39 +37,56 @@ type Props = CompositeScreenProps<
 export default function ProfileScreen({ navigation }: Props) {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadProfile();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
 
-  const loadProfile = async () => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+      const loadProfile = async () => {
+        try {
+          setLoading(true);
 
-    if (!user) {
-      return;
-    }
+          const {
+            data: { user },
+            error: userError,
+          } = await supabase.auth.getUser();
 
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('full_name, email')
-      .eq('id', user.id)
-      .single();
+          if (userError) throw userError;
 
-    if (error) {
-      console.log(error);
-      return;
-    }
+          if (!user) return;
 
-    setFullName(data.full_name || '');
-    setEmail(data.email || user.email || '');
-  };
+          const { data, error } = await supabase
+            .from('profiles')
+            .select('full_name, email')
+            .eq('id', user.id)
+            .single();
 
-  const handleLogout = async () => {
+          if (error) throw error;
+
+          if (isActive) {
+            setFullName(data.full_name || '');
+            setEmail(data.email || user.email || '');
+          }
+        } catch (error) {
+          console.log('Profile loading error:', error);
+        } finally {
+          if (isActive) setLoading(false);
+        }
+      };
+
+      void loadProfile();
+
+      return () => {
+        isActive = false;
+      };
+    }, [])
+  );
+
+  const handleLogout = () => {
     Alert.alert(
       'Log Out',
-      'Are you sure you want to log out?',
+      'Are you sure you want to log out of your Pink Blush account?',
       [
         {
           text: 'Cancel',
@@ -100,168 +113,129 @@ export default function ProfileScreen({ navigation }: Props) {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
       >
-        <Text style={styles.title}>
-          My Profile
-        </Text>
+        {/* Header */}
+        <View style={styles.header}>
+          <Text style={styles.title}>My Profile</Text>
+          <Text style={styles.subtitle}>
+            Manage your account and personal information.
+          </Text>
+        </View>
 
+        {/* Profile Information */}
         <View style={styles.profileCard}>
           <View style={styles.avatar}>
-            <Ionicons
-              name="person"
-              size={35}
-              color="#fff"
-            />
+            <Text style={styles.avatarText}>
+              {fullName
+                ? fullName.trim().charAt(0).toUpperCase()
+                : 'C'}
+            </Text>
           </View>
 
           <View style={styles.profileInfo}>
-            <Text style={styles.name}>
-              {fullName || 'Customer'}
-            </Text>
+            {loading ? (
+              <ActivityIndicator color="#D96B8A" />
+            ) : (
+              <>
+                <Text style={styles.name}>
+                  {fullName || 'Pink Blush Customer'}
+                </Text>
 
-            <Text style={styles.email}>
-              {email}
-            </Text>
+                <Text style={styles.email}>
+                  {email || 'No email available'}
+                </Text>
 
-            <Text style={styles.member}>
-              Pink Blush Customer
-            </Text>
+                <View style={styles.memberBadge}>
+                  <Text style={styles.member}>
+                    PINK BLUSH CUSTOMER
+                  </Text>
+                </View>
+              </>
+            )}
           </View>
         </View>
 
+        {/* Personal Information */}
         <Text style={styles.sectionTitle}>
           Personal Information
         </Text>
 
         <TouchableOpacity
           style={styles.menuItem}
+          activeOpacity={0.7}
+          onPress={() => navigation.navigate('PersonalDetails')}
         >
-          <View style={styles.menuIcon}>
-            <Ionicons
-              name="person-outline"
-              size={22}
-              color="#d96b8a"
-            />
-          </View>
-
           <View style={styles.menuContent}>
             <Text style={styles.menuTitle}>
               Personal Details
             </Text>
 
             <Text style={styles.menuText}>
-              Manage your name and contact information
+              Manage your name and contact information.
             </Text>
           </View>
 
-          <Ionicons
-            name="chevron-forward"
-            size={20}
-            color="#bbb"
-          />
+          <Text style={styles.arrow}>›</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.menuItem}
-          onPress={() =>
-            navigation.navigate('Measurements')
-          }
+          activeOpacity={0.7}
+          onPress={() => navigation.navigate('Measurements')}
         >
-          <View style={styles.menuIcon}>
-            <Ionicons
-              name="resize-outline"
-              size={22}
-              color="#d96b8a"
-            />
-          </View>
-
           <View style={styles.menuContent}>
             <Text style={styles.menuTitle}>
               My Measurements
             </Text>
 
             <Text style={styles.menuText}>
-              View and manage your garment measurements
+              View and manage your garment measurements.
             </Text>
           </View>
 
-          <Ionicons
-            name="chevron-forward"
-            size={20}
-            color="#bbb"
-          />
+          <Text style={styles.arrow}>›</Text>
         </TouchableOpacity>
 
+        {/* Account Settings */}
         <Text style={styles.sectionTitle}>
-          Account
+          Account Settings
         </Text>
 
+        <View style={styles.infoCard}>
+          <Text style={styles.infoTitle}>
+            Your Pink Blush Account
+          </Text>
+
+          <Text style={styles.infoText}>
+            Keep your personal details and measurements updated
+            to make ordering your favorite garments easier.
+          </Text>
+        </View>
+
+        {/* Change Password */}
         <TouchableOpacity
           style={styles.menuItem}
+          activeOpacity={0.7}
+          onPress={() => navigation.navigate('ChangePassword')}
         >
-          <View style={styles.menuIcon}>
-            <Ionicons
-              name="notifications-outline"
-              size={22}
-              color="#d96b8a"
-            />
-          </View>
-
-          <View style={styles.menuContent}>
-            <Text style={styles.menuTitle}>
-              Notifications
-            </Text>
-
-            <Text style={styles.menuText}>
-              Manage your notification preferences
-            </Text>
-          </View>
-
-          <Ionicons
-            name="chevron-forward"
-            size={20}
-            color="#bbb"
-          />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.menuItem}
-        >
-          <View style={styles.menuIcon}>
-            <Ionicons
-              name="lock-closed-outline"
-              size={22}
-              color="#d96b8a"
-            />
-          </View>
-
           <View style={styles.menuContent}>
             <Text style={styles.menuTitle}>
               Change Password
             </Text>
 
             <Text style={styles.menuText}>
-              Update your account password
+              Update your account password.
             </Text>
           </View>
 
-          <Ionicons
-            name="chevron-forward"
-            size={20}
-            color="#bbb"
-          />
+          <Text style={styles.arrow}>›</Text>
         </TouchableOpacity>
 
+        {/* Logout */}
         <TouchableOpacity
           style={styles.logoutButton}
           onPress={handleLogout}
+          activeOpacity={0.8}
         >
-          <Ionicons
-            name="log-out-outline"
-            size={20}
-            color="#d96b8a"
-            style={styles.logoutIcon}
-          />
-
           <Text style={styles.logoutText}>
             Log Out
           </Text>
@@ -269,6 +243,10 @@ export default function ProfileScreen({ navigation }: Props) {
 
         <Text style={styles.version}>
           Pink Blush v1.0.0
+        </Text>
+
+        <Text style={styles.footer}>
+          Made with love for your perfect fit.
         </Text>
       </ScrollView>
     </View>
@@ -286,17 +264,26 @@ const styles = StyleSheet.create({
     paddingBottom: 110,
   },
 
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#d96b8a',
+  header: {
     marginTop: 20,
     marginBottom: 25,
   },
 
+  title: {
+    fontSize: 27,
+    fontWeight: 'bold',
+    color: '#D96B8A',
+  },
+
+  subtitle: {
+    fontSize: 13,
+    color: '#999',
+    marginTop: 6,
+  },
+
   profileCard: {
-    backgroundColor: '#fdf1f5',
-    borderRadius: 20,
+    backgroundColor: '#FDF1F5',
+    borderRadius: 18,
     padding: 20,
     flexDirection: 'row',
     alignItems: 'center',
@@ -304,13 +291,19 @@ const styles = StyleSheet.create({
   },
 
   avatar: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
-    backgroundColor: '#d96b8a',
+    width: 65,
+    height: 65,
+    borderRadius: 33,
+    backgroundColor: '#D96B8A',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 15,
+  },
+
+  avatarText: {
+    color: '#fff',
+    fontSize: 27,
+    fontWeight: 'bold',
   },
 
   profileInfo: {
@@ -318,29 +311,39 @@ const styles = StyleSheet.create({
   },
 
   name: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 4,
-  },
-
-  email: {
-    fontSize: 13,
-    color: '#777',
-    marginBottom: 5,
-  },
-
-  member: {
-    fontSize: 12,
-    color: '#d96b8a',
-    fontWeight: '600',
-  },
-
-  sectionTitle: {
     fontSize: 18,
     fontWeight: 'bold',
     color: '#333',
+    marginBottom: 5,
+  },
+
+  email: {
+    fontSize: 12,
+    color: '#888',
+    marginBottom: 9,
+  },
+
+  memberBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#F8DCE5',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 20,
+  },
+
+  member: {
+    fontSize: 9,
+    color: '#B84470',
+    fontWeight: 'bold',
+    letterSpacing: 0.6,
+  },
+
+  sectionTitle: {
+    fontSize: 17,
+    fontWeight: 'bold',
+    color: '#333',
     marginBottom: 12,
+    marginTop: 5,
   },
 
   menuItem: {
@@ -348,20 +351,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#fff',
     borderWidth: 1,
-    borderColor: '#eee',
-    borderRadius: 15,
-    padding: 15,
+    borderColor: '#F0E5E9',
+    borderRadius: 13,
+    padding: 17,
     marginBottom: 12,
-  },
-
-  menuIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    backgroundColor: '#fce8ee',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 13,
   },
 
   menuContent: {
@@ -369,44 +362,72 @@ const styles = StyleSheet.create({
   },
 
   menuTitle: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: 'bold',
     color: '#333',
-    marginBottom: 4,
+    marginBottom: 5,
   },
 
   menuText: {
     fontSize: 12,
+    color: '#999',
+    lineHeight: 18,
+  },
+
+  arrow: {
+    fontSize: 26,
+    color: '#D96B8A',
+    marginLeft: 10,
+  },
+
+  infoCard: {
+    backgroundColor: '#FDF5F7',
+    borderRadius: 13,
+    padding: 17,
+    marginBottom: 20,
+  },
+
+  infoTitle: {
+    color: '#B84470',
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginBottom: 7,
+  },
+
+  infoText: {
     color: '#888',
-    lineHeight: 17,
+    fontSize: 12,
+    lineHeight: 19,
   },
 
   logoutButton: {
     backgroundColor: '#fff',
     borderWidth: 1,
-    borderColor: '#d96b8a',
+    borderColor: '#D96B8A',
     borderRadius: 12,
     padding: 15,
-    flexDirection: 'row',
-    justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 15,
-  },
-
-  logoutIcon: {
-    marginRight: 8,
+    justifyContent: 'center',
+    marginTop: 10,
   },
 
   logoutText: {
-    color: '#d96b8a',
-    fontSize: 15,
+    color: '#D96B8A',
+    fontSize: 14,
     fontWeight: 'bold',
   },
 
   version: {
     textAlign: 'center',
     color: '#aaa',
-    fontSize: 12,
-    marginTop: 20,
+    fontSize: 11,
+    marginTop: 22,
+  },
+
+  footer: {
+    textAlign: 'center',
+    color: '#C59BA9',
+    fontSize: 11,
+    marginTop: 7,
   },
 });

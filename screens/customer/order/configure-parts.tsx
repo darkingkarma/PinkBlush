@@ -11,12 +11,15 @@ import {
   Text,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
+
+import { Ionicons } from '@expo/vector-icons';
 
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import type { RootStackParamList } from '../../navigator';
+import type { RootStackParamList } from '../../../navigator';
 import { supabase } from '../../../supabase';
 
 type Props = NativeStackScreenProps<
@@ -61,6 +64,48 @@ type Fabric = SelectedFabric & {
 
 type ModalType = 'design' | 'fabric' | null;
 
+// Reusable image component with broken-image fallback.
+function OptionImage({
+  imageUrl,
+  large = false,
+}: {
+  imageUrl?: string | null;
+  large?: boolean;
+}) {
+  const [imageFailed, setImageFailed] = useState(false);
+
+  const imageStyle = large
+    ? styles.largeOptionImage
+    : styles.optionImage;
+
+  if (!imageUrl || imageFailed) {
+    return (
+      <View style={[imageStyle, styles.imagePlaceholder]}>
+        <Ionicons
+          name="image-outline"
+          size={large ? 30 : 23}
+          color="#d96b8a"
+        />
+
+        <Text style={styles.placeholderText}>
+          No image
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={[imageStyle, styles.optionImageContainer]}>
+      <Image
+        source={{ uri: imageUrl }}
+        style={styles.imageContent}
+        resizeMode="contain"
+        onError={() => setImageFailed(true)}
+      />
+    </View>
+  );
+}
+
 export default function ConfigurePartsScreen({
   route,
   navigation,
@@ -71,6 +116,8 @@ export default function ConfigurePartsScreen({
     selectedDesigns: initialSelectedDesigns,
     selectedFabrics: initialSelectedFabrics,
   } = route.params;
+
+  const { width: screenWidth } = useWindowDimensions();
 
   const [parts, setParts] = useState<GarmentPart[]>([]);
 
@@ -88,14 +135,18 @@ export default function ConfigurePartsScreen({
     useState<Record<string, number>>({});
 
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
 
   const [modalType, setModalType] = useState<ModalType>(null);
+
   const [activePart, setActivePart] =
     useState<GarmentPart | null>(null);
 
   const [designs, setDesigns] = useState<Design[]>([]);
   const [fabrics, setFabrics] = useState<Fabric[]>([]);
+
   const [loadingOptions, setLoadingOptions] = useState(false);
+  const [optionsError, setOptionsError] = useState('');
 
   const [pendingDesign, setPendingDesign] =
     useState<SelectedDesign | null>(null);
@@ -103,48 +154,93 @@ export default function ConfigurePartsScreen({
   const [pendingFabric, setPendingFabric] =
     useState<SelectedFabric | null>(null);
 
-  const getParts = async () => {
+  // Load selected garment parts.
+  const getParts = useCallback(async () => {
     setLoading(true);
+    setLoadError('');
 
     try {
+      if (!selectedPartIds || selectedPartIds.length === 0) {
+        setParts([]);
+        return;
+      }
+
       const { data, error } = await supabase
         .from('garment_parts')
         .select('id, name, description, price, gender, available')
         .in('id', selectedPartIds)
+        .eq('available', true)
         .order('name');
 
       if (error) throw error;
 
-      setParts((data || []) as GarmentPart[]);
+      const availableParts = (data || []) as GarmentPart[];
+
+      setParts(availableParts);
+
+      // Keep only selections belonging to available parts.
+      const availableIds = new Set(
+        availableParts.map((part) => part.id)
+      );
+
+      setSelectedDesigns((current) => {
+        const updated: Record<string, SelectedDesign> = {};
+
+        Object.entries(current).forEach(([id, design]) => {
+          if (availableIds.has(id)) {
+            updated[id] = design;
+          }
+        });
+
+        return updated;
+      });
+
+      setSelectedFabrics((current) => {
+        const updated: Record<string, SelectedFabric> = {};
+
+        Object.entries(current).forEach(([id, fabric]) => {
+          if (availableIds.has(id)) {
+            updated[id] = fabric;
+          }
+        });
+
+        return updated;
+      });
     } catch (error) {
-      console.log('Error loading garment parts:', error);
-      Alert.alert('Error', 'Could not load garment parts.');
+      console.error('Error loading garment parts:', error);
+
       setParts([]);
+      setLoadError(
+        'Could not load garment parts. Please check your connection and try again.'
+      );
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedPartIds]);
 
   useFocusEffect(
     useCallback(() => {
-      getParts();
-    }, [selectedPartIds])
+      void getParts();
+    }, [getParts])
   );
 
+  // Close modal and clear temporary selections.
   const closeModal = () => {
     setModalType(null);
     setActivePart(null);
     setPendingDesign(null);
     setPendingFabric(null);
+    setOptionsError('');
   };
 
-  // Load designs belonging to the selected garment part.
+  // Open design selection.
   const openDesignModal = async (part: GarmentPart) => {
     setActivePart(part);
     setModalType('design');
     setLoadingOptions(true);
-    setDesigns([]);
+    setOptionsError('');
 
+    setDesigns([]);
     setPendingDesign(selectedDesigns[part.id] || null);
 
     try {
@@ -158,14 +254,17 @@ export default function ConfigurePartsScreen({
 
       setDesigns((data || []) as Design[]);
     } catch (error) {
-      console.log('Error loading designs:', error);
-      Alert.alert('Error', 'Could not load designs for this part.');
+      console.error('Error loading designs:', error);
+
+      setOptionsError(
+        'Could not load designs. Please try again.'
+      );
     } finally {
       setLoadingOptions(false);
     }
   };
 
-  // Load fabrics assigned to the selected design.
+  // Open fabric selection for the currently selected design.
   const openFabricModal = async (part: GarmentPart) => {
     const selectedDesign = selectedDesigns[part.id];
 
@@ -180,8 +279,9 @@ export default function ConfigurePartsScreen({
     setActivePart(part);
     setModalType('fabric');
     setLoadingOptions(true);
-    setFabrics([]);
+    setOptionsError('');
 
+    setFabrics([]);
     setPendingFabric(selectedFabrics[part.id] || null);
 
     try {
@@ -217,8 +317,8 @@ export default function ConfigurePartsScreen({
 
       setFabrics(fabricList);
 
-      // Clear a previously selected fabric if it is not
-      // assigned to the currently selected design.
+      // Check whether the previously selected fabric
+      // is still assigned to this design.
       const currentFabric = selectedFabrics[part.id];
 
       if (
@@ -228,24 +328,34 @@ export default function ConfigurePartsScreen({
         )
       ) {
         setPendingFabric(null);
+
+        setSelectedFabrics((current) => {
+          const updated = { ...current };
+          delete updated[part.id];
+          return updated;
+        });
       }
     } catch (error) {
-      console.log('Error loading design fabrics:', error);
-      Alert.alert(
-        'Error',
-        'Could not load fabrics assigned to this design.'
+      console.error('Error loading design fabrics:', error);
+
+      setOptionsError(
+        'Could not load fabrics assigned to this design. Please try again.'
       );
     } finally {
       setLoadingOptions(false);
     }
   };
 
+  // Confirm design or fabric selection.
   const confirmSelection = () => {
     if (!activePart || !modalType) return;
 
     if (modalType === 'design') {
       if (!pendingDesign) {
-        Alert.alert('Choose a design', 'Please select a design first.');
+        Alert.alert(
+          'Choose a Design',
+          'Please select a design first.'
+        );
         return;
       }
 
@@ -256,8 +366,7 @@ export default function ConfigurePartsScreen({
         [activePart.id]: pendingDesign,
       }));
 
-      // A different design may have different allowed fabrics.
-      // Clear the old fabric when the design changes.
+      // A changed design may have different available fabrics.
       if (
         previousDesign &&
         previousDesign.id !== pendingDesign.id
@@ -272,7 +381,10 @@ export default function ConfigurePartsScreen({
 
     if (modalType === 'fabric') {
       if (!pendingFabric) {
-        Alert.alert('Choose a fabric', 'Please select a fabric first.');
+        Alert.alert(
+          'Choose a Fabric',
+          'Please select a fabric first.'
+        );
         return;
       }
 
@@ -285,6 +397,7 @@ export default function ConfigurePartsScreen({
     closeModal();
   };
 
+  // Quantity controls.
   const increaseQuantity = (partId: string) => {
     setQuantities((current) => ({
       ...current,
@@ -305,11 +418,15 @@ export default function ConfigurePartsScreen({
     });
   };
 
+  // Price calculations.
   const getUnitPrice = (part: GarmentPart) => {
     const fabricAddition =
       selectedFabrics[part.id]?.price_addition || 0;
 
-    return Number(part.price) + Number(fabricAddition);
+    return (
+      Number(part.price || 0) +
+      Number(fabricAddition || 0)
+    );
   };
 
   const getSubtotal = (part: GarmentPart) => {
@@ -321,26 +438,36 @@ export default function ConfigurePartsScreen({
     0
   );
 
+  // Check whether all parts are configured.
+  const incompletePart = parts.find(
+    (part) =>
+      !selectedDesigns[part.id] ||
+      !selectedFabrics[part.id]
+  );
+
+  const allPartsConfigured =
+    parts.length > 0 && !incompletePart;
+
+  // Continue to measurements.
   const continueToMeasurements = () => {
     if (parts.length === 0) {
       Alert.alert(
-        'No parts',
-        'Please select at least one garment part.'
+        'No Parts',
+        'Please select at least one available garment part.'
       );
       return;
     }
 
-    // Every part must have both a design and its allowed fabric.
-    const incompletePart = parts.find(
+    const missingPart = parts.find(
       (part) =>
         !selectedDesigns[part.id] ||
         !selectedFabrics[part.id]
     );
 
-    if (incompletePart) {
+    if (missingPart) {
       Alert.alert(
         'Incomplete Selection',
-        `Please choose both a design and a fabric for ${incompletePart.name}.`
+        `Please choose both a design and a fabric for ${missingPart.name}.`
       );
       return;
     }
@@ -370,31 +497,21 @@ export default function ConfigurePartsScreen({
     });
   };
 
-  const renderOptionImage = (
-    imageUrl: string | null | undefined
-  ) => {
-    if (imageUrl) {
-      return (
-        <Image
-          source={{ uri: imageUrl }}
-          style={styles.optionImage}
-          resizeMode="cover"
-        />
-      );
-    }
-
-    return (
-      <View style={[styles.optionImage, styles.imagePlaceholder]}>
-        <Text style={styles.placeholderText}>No image</Text>
-      </View>
-    );
-  };
+  // Responsive card sizing.
+  const cardPadding = screenWidth < 360 ? 12 : 16;
 
   return (
     <View style={styles.container}>
+      {/* Screen Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>Configure Parts</Text>
-        <Text style={styles.subtitle}>{garment.name}</Text>
+        <Text style={styles.title}>
+          Configure Parts
+        </Text>
+
+        <Text style={styles.subtitle}>
+          {garment.name}
+        </Text>
+
         <Text style={styles.helperText}>
           Choose a design first, then select a fabric available for that design.
         </Text>
@@ -402,8 +519,39 @@ export default function ConfigurePartsScreen({
 
       {loading ? (
         <View style={styles.centered}>
-          <ActivityIndicator size="large" color="#d96b8a" />
-          <Text style={styles.emptyText}>Loading selected parts...</Text>
+          <ActivityIndicator
+            size="large"
+            color="#d96b8a"
+          />
+
+          <Text style={styles.emptyText}>
+            Loading selected parts...
+          </Text>
+        </View>
+      ) : loadError ? (
+        <View style={styles.centered}>
+          <Ionicons
+            name="cloud-offline-outline"
+            size={48}
+            color="#d96b8a"
+          />
+
+          <Text style={styles.emptyTitle}>
+            Unable to Load Parts
+          </Text>
+
+          <Text style={styles.emptyText}>
+            {loadError}
+          </Text>
+
+          <TouchableOpacity
+            style={styles.retryButton}
+            onPress={() => void getParts()}
+          >
+            <Text style={styles.retryButtonText}>
+              Try Again
+            </Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <FlatList
@@ -411,43 +559,132 @@ export default function ConfigurePartsScreen({
           keyExtractor={(item) => item.id}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.list}
+          keyboardShouldPersistTaps="handled"
           ListEmptyComponent={
             <View style={styles.centered}>
+              <Ionicons
+                name="shirt-outline"
+                size={45}
+                color="#d96b8a"
+              />
+
+              <Text style={styles.emptyTitle}>
+                No Available Parts
+              </Text>
+
               <Text style={styles.emptyText}>
-                No garment parts were found.
+                The selected garment parts are no longer available.
+                Please return and choose another part.
               </Text>
             </View>
           }
           ListFooterComponent={
-            <View>
-              <View style={styles.totalBox}>
-                <Text style={styles.totalLabel}>Total</Text>
-                <Text style={styles.totalAmount}>
-                  ₱{totalAmount.toFixed(2)}
-                </Text>
-              </View>
+            parts.length > 0 ? (
+              <View>
+                {/* Total */}
+                <View style={styles.totalBox}>
+                  <View>
+                    <Text style={styles.totalLabel}>
+                      Order Subtotal
+                    </Text>
 
-              <TouchableOpacity
-                style={styles.continueButton}
-                onPress={continueToMeasurements}
-              >
-                <Text style={styles.continueButtonText}>
-                  Continue
-                </Text>
-              </TouchableOpacity>
-            </View>
+                    <Text style={styles.totalHint}>
+                      Based on selected parts and fabrics
+                    </Text>
+                  </View>
+
+                  <Text style={styles.totalAmount}>
+                    ₱{totalAmount.toFixed(2)}
+                  </Text>
+                </View>
+
+                {/* Configuration Progress */}
+                {!allPartsConfigured && (
+                  <View style={styles.progressNotice}>
+                    <Ionicons
+                      name="information-circle-outline"
+                      size={19}
+                      color="#b77b36"
+                    />
+
+                    <Text style={styles.progressText}>
+                      Complete the design and fabric selections for every part to continue.
+                    </Text>
+                  </View>
+                )}
+
+                {/* Continue */}
+                <TouchableOpacity
+                  style={[
+                    styles.continueButton,
+                    !allPartsConfigured &&
+                      styles.continueButtonDisabled,
+                  ]}
+                  onPress={continueToMeasurements}
+                  disabled={!allPartsConfigured}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.continueButtonText}>
+                    Continue to Measurements
+                  </Text>
+
+                  <Ionicons
+                    name="arrow-forward"
+                    size={19}
+                    color="#fff"
+                  />
+                </TouchableOpacity>
+              </View>
+            ) : null
           }
           renderItem={({ item }) => {
             const design = selectedDesigns[item.id];
             const fabric = selectedFabrics[item.id];
+            const quantity = quantities[item.id] || 1;
 
             return (
-              <View style={styles.card}>
-                <Text style={styles.partName}>{item.name}</Text>
-                <Text style={styles.gender}>{item.gender}</Text>
+              <View
+                style={[
+                  styles.card,
+                  { padding: cardPadding },
+                ]}
+              >
+                {/* Part Information */}
+                <View style={styles.partHeader}>
+                  <View style={styles.partHeading}>
+                    <Text style={styles.partName}>
+                      {item.name}
+                    </Text>
+
+                    <Text style={styles.gender}>
+                      {item.gender || 'Unspecified'}
+                    </Text>
+                  </View>
+
+                  <View
+                    style={[
+                      styles.partStatus,
+                      design && fabric
+                        ? styles.completeStatus
+                        : styles.pendingStatus,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.partStatusText,
+                        design && fabric
+                          ? styles.completeStatusText
+                          : styles.pendingStatusText,
+                      ]}
+                    >
+                      {design && fabric ? 'Complete' : 'Pending'}
+                    </Text>
+                  </View>
+                </View>
 
                 <Text style={styles.price}>
-                  Base price: ₱{Number(item.price).toFixed(2)}
+                  Base price: ₱
+                  {Number(item.price || 0).toFixed(2)}
                 </Text>
 
                 {!!item.description && (
@@ -456,29 +693,44 @@ export default function ConfigurePartsScreen({
                   </Text>
                 )}
 
+                {/* Design Selection */}
                 <TouchableOpacity
                   style={styles.selectionBox}
                   onPress={() => openDesignModal(item)}
+                  activeOpacity={0.8}
                 >
-                  {renderOptionImage(design?.image_url)}
+                  <OptionImage imageUrl={design?.image_url} />
 
                   <View style={styles.selectionInfo}>
-                    <Text style={styles.optionTitle}>Design</Text>
+                    <Text style={styles.optionTitle}>
+                      Design
+                    </Text>
+
                     <Text
                       style={[
                         styles.optionText,
                         design && styles.selectedOptionText,
                       ]}
+                      numberOfLines={2}
                     >
                       {design?.name || 'Choose Design'}
                     </Text>
                   </View>
 
-                  <Text style={styles.changeText}>
-                    {design ? 'Change' : 'Select'}
-                  </Text>
+                  <View style={styles.selectAction}>
+                    <Text style={styles.changeText}>
+                      {design ? 'Change' : 'Select'}
+                    </Text>
+
+                    <Ionicons
+                      name="chevron-forward"
+                      size={17}
+                      color="#d96b8a"
+                    />
+                  </View>
                 </TouchableOpacity>
 
+                {/* Fabric Selection */}
                 <TouchableOpacity
                   style={[
                     styles.selectionBox,
@@ -486,16 +738,21 @@ export default function ConfigurePartsScreen({
                   ]}
                   onPress={() => openFabricModal(item)}
                   disabled={!design}
+                  activeOpacity={0.8}
                 >
-                  {renderOptionImage(fabric?.image_url)}
+                  <OptionImage imageUrl={fabric?.image_url} />
 
                   <View style={styles.selectionInfo}>
-                    <Text style={styles.optionTitle}>Fabric</Text>
+                    <Text style={styles.optionTitle}>
+                      Fabric
+                    </Text>
+
                     <Text
                       style={[
                         styles.optionText,
                         fabric && styles.selectedOptionText,
                       ]}
+                      numberOfLines={2}
                     >
                       {!design
                         ? 'Choose a design first'
@@ -504,42 +761,79 @@ export default function ConfigurePartsScreen({
 
                     {fabric && (
                       <Text style={styles.additionText}>
-                        +₱{Number(fabric.price_addition).toFixed(2)}
+                        +₱
+                        {Number(
+                          fabric.price_addition || 0
+                        ).toFixed(2)}
                       </Text>
                     )}
                   </View>
 
-                  <Text style={styles.changeText}>
-                    {fabric ? 'Change' : 'Select'}
-                  </Text>
+                  <View style={styles.selectAction}>
+                    <Text style={styles.changeText}>
+                      {fabric ? 'Change' : 'Select'}
+                    </Text>
+
+                    <Ionicons
+                      name="chevron-forward"
+                      size={17}
+                      color="#d96b8a"
+                    />
+                  </View>
                 </TouchableOpacity>
 
+                {/* Quantity */}
                 <View style={styles.quantityBox}>
-                  <Text style={styles.optionTitle}>Quantity</Text>
+                  <View>
+                    <Text style={styles.optionTitle}>
+                      Quantity
+                    </Text>
+
+                    <Text style={styles.quantityHint}>
+                      Number of pieces
+                    </Text>
+                  </View>
 
                   <View style={styles.quantityRow}>
                     <TouchableOpacity
-                      style={styles.quantityButton}
+                      style={[
+                        styles.quantityButton,
+                        quantity <= 1 &&
+                          styles.quantityButtonDisabled,
+                      ]}
                       onPress={() => decreaseQuantity(item.id)}
+                      disabled={quantity <= 1}
                     >
-                      <Text style={styles.quantityButtonText}>−</Text>
+                      <Ionicons
+                        name="remove"
+                        size={20}
+                        color={quantity <= 1 ? '#bbb' : '#d96b8a'}
+                      />
                     </TouchableOpacity>
 
                     <Text style={styles.quantityText}>
-                      {quantities[item.id] || 1}
+                      {quantity}
                     </Text>
 
                     <TouchableOpacity
                       style={styles.quantityButton}
                       onPress={() => increaseQuantity(item.id)}
                     >
-                      <Text style={styles.quantityButtonText}>+</Text>
+                      <Ionicons
+                        name="add"
+                        size={20}
+                        color="#d96b8a"
+                      />
                     </TouchableOpacity>
                   </View>
                 </View>
 
+                {/* Subtotal */}
                 <View style={styles.subtotalBox}>
-                  <Text style={styles.subtotalLabel}>Subtotal</Text>
+                  <Text style={styles.subtotalLabel}>
+                    Subtotal
+                  </Text>
+
                   <Text style={styles.subtotalAmount}>
                     ₱{getSubtotal(item).toFixed(2)}
                   </Text>
@@ -550,6 +844,7 @@ export default function ConfigurePartsScreen({
         />
       )}
 
+      {/* Design / Fabric Modal */}
       <Modal
         visible={modalType !== null}
         transparent
@@ -561,6 +856,7 @@ export default function ConfigurePartsScreen({
           <View style={styles.modalSheet}>
             <View style={styles.modalHandle} />
 
+            {/* Modal Header */}
             <View style={styles.modalHeader}>
               <View style={styles.modalHeading}>
                 <Text style={styles.modalTitle}>
@@ -578,16 +874,56 @@ export default function ConfigurePartsScreen({
                 style={styles.closeButton}
                 onPress={closeModal}
               >
-                <Text style={styles.closeButtonText}>✕</Text>
+                <Ionicons
+                  name="close"
+                  size={21}
+                  color="#555"
+                />
               </TouchableOpacity>
             </View>
 
+            {/* Loading */}
             {loadingOptions ? (
               <View style={styles.modalLoading}>
-                <ActivityIndicator size="large" color="#d96b8a" />
+                <ActivityIndicator
+                  size="large"
+                  color="#d96b8a"
+                />
+
                 <Text style={styles.emptyText}>
-                  Loading {modalType === 'design' ? 'designs' : 'fabrics'}...
+                  Loading {modalType === 'design'
+                    ? 'designs'
+                    : 'fabrics'}...
                 </Text>
+              </View>
+            ) : optionsError ? (
+              <View style={styles.modalLoading}>
+                <Ionicons
+                  name="cloud-offline-outline"
+                  size={42}
+                  color="#d96b8a"
+                />
+
+                <Text style={styles.emptyText}>
+                  {optionsError}
+                </Text>
+
+                <TouchableOpacity
+                  style={styles.retryButton}
+                  onPress={() => {
+                    if (!activePart) return;
+
+                    if (modalType === 'design') {
+                      void openDesignModal(activePart);
+                    } else {
+                      void openFabricModal(activePart);
+                    }
+                  }}
+                >
+                  <Text style={styles.retryButtonText}>
+                    Try Again
+                  </Text>
+                </TouchableOpacity>
               </View>
             ) : modalType === 'design' ? (
               <FlatList
@@ -595,18 +931,27 @@ export default function ConfigurePartsScreen({
                 keyExtractor={(item) => item.id}
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={styles.modalList}
+                keyboardShouldPersistTaps="handled"
                 ListEmptyComponent={
                   <View style={styles.emptyOptions}>
+                    <Ionicons
+                      name="color-palette-outline"
+                      size={40}
+                      color="#d96b8a"
+                    />
+
                     <Text style={styles.emptyTitle}>
-                      No designs available
+                      No Designs Available
                     </Text>
+
                     <Text style={styles.emptyText}>
                       No designs have been added for this part yet.
                     </Text>
                   </View>
                 }
                 renderItem={({ item }) => {
-                  const isSelected = pendingDesign?.id === item.id;
+                  const isSelected =
+                    pendingDesign?.id === item.id;
 
                   return (
                     <TouchableOpacity
@@ -615,22 +960,29 @@ export default function ConfigurePartsScreen({
                         isSelected && styles.optionCardSelected,
                       ]}
                       onPress={() => setPendingDesign(item)}
+                      activeOpacity={0.8}
                     >
-                      {renderOptionImage(item.image_url)}
+                      <OptionImage
+                        imageUrl={item.image_url}
+                        large
+                      />
 
                       <View style={styles.optionCardInfo}>
                         <Text style={styles.optionCardTitle}>
                           {item.name}
                         </Text>
+
                         <Text style={styles.optionDescription}>
-                          {item.description || 'No description available.'}
+                          {item.description ||
+                            'No description available.'}
                         </Text>
                       </View>
 
                       <View
                         style={[
                           styles.radioCircle,
-                          isSelected && styles.radioCircleSelected,
+                          isSelected &&
+                            styles.radioCircleSelected,
                         ]}
                       >
                         {isSelected && (
@@ -647,18 +999,27 @@ export default function ConfigurePartsScreen({
                 keyExtractor={(item) => item.id}
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={styles.modalList}
+                keyboardShouldPersistTaps="handled"
                 ListEmptyComponent={
                   <View style={styles.emptyOptions}>
+                    <Ionicons
+                      name="layers-outline"
+                      size={40}
+                      color="#d96b8a"
+                    />
+
                     <Text style={styles.emptyTitle}>
-                      No fabrics available
+                      No Fabrics Available
                     </Text>
+
                     <Text style={styles.emptyText}>
                       No available fabrics are assigned to this design.
                     </Text>
                   </View>
                 }
                 renderItem={({ item }) => {
-                  const isSelected = pendingFabric?.id === item.id;
+                  const isSelected =
+                    pendingFabric?.id === item.id;
 
                   return (
                     <TouchableOpacity
@@ -667,25 +1028,36 @@ export default function ConfigurePartsScreen({
                         isSelected && styles.optionCardSelected,
                       ]}
                       onPress={() => setPendingFabric(item)}
+                      activeOpacity={0.8}
                     >
-                      {renderOptionImage(item.image_url)}
+                      <OptionImage
+                        imageUrl={item.image_url}
+                        large
+                      />
 
                       <View style={styles.optionCardInfo}>
                         <Text style={styles.optionCardTitle}>
                           {item.name}
                         </Text>
+
                         <Text style={styles.optionDescription}>
-                          {item.description || 'No description available.'}
+                          {item.description ||
+                            'No description available.'}
                         </Text>
+
                         <Text style={styles.additionText}>
-                          +₱{Number(item.price_addition).toFixed(2)}
+                          +₱
+                          {Number(
+                            item.price_addition || 0
+                          ).toFixed(2)}
                         </Text>
                       </View>
 
                       <View
                         style={[
                           styles.radioCircle,
-                          isSelected && styles.radioCircleSelected,
+                          isSelected &&
+                            styles.radioCircleSelected,
                         ]}
                       >
                         {isSelected && (
@@ -698,12 +1070,15 @@ export default function ConfigurePartsScreen({
               />
             )}
 
+            {/* Modal Actions */}
             <View style={styles.modalFooter}>
               <TouchableOpacity
                 style={styles.cancelButton}
                 onPress={closeModal}
               >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
+                <Text style={styles.cancelButtonText}>
+                  Cancel
+                </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -711,12 +1086,14 @@ export default function ConfigurePartsScreen({
                   styles.confirmButton,
                   (
                     loadingOptions ||
+                    !!optionsError ||
                     (modalType === 'design' && !pendingDesign) ||
                     (modalType === 'fabric' && !pendingFabric)
                   ) && styles.confirmButtonDisabled,
                 ]}
                 disabled={
                   loadingOptions ||
+                  !!optionsError ||
                   (modalType === 'design' && !pendingDesign) ||
                   (modalType === 'fabric' && !pendingFabric)
                 }
@@ -737,85 +1114,127 @@ export default function ConfigurePartsScreen({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: '#FFF8FA',
   },
 
   header: {
-    padding: 20,
-    paddingBottom: 10,
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 12,
   },
 
   title: {
     fontSize: 26,
-    fontWeight: '700',
+    fontWeight: '800',
     color: '#333',
   },
 
   subtitle: {
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#d96b8a',
     marginTop: 5,
   },
 
   helperText: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#888',
     marginTop: 8,
+    lineHeight: 19,
   },
 
   list: {
-    padding: 20,
-    paddingTop: 10,
+    paddingHorizontal: 16,
+    paddingTop: 8,
     paddingBottom: 30,
     flexGrow: 1,
   },
 
   card: {
     borderWidth: 1,
-    borderColor: '#eee',
-    borderRadius: 12,
+    borderColor: '#F0E5E9',
+    borderRadius: 14,
     padding: 16,
     marginBottom: 15,
     backgroundColor: '#fff',
   },
 
+  partHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+
+  partHeading: {
+    flex: 1,
+  },
+
   partName: {
     fontSize: 20,
-    fontWeight: '700',
+    fontWeight: '800',
     color: '#333',
   },
 
   gender: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#888',
     marginTop: 4,
   },
 
+  partStatus: {
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+
+  completeStatus: {
+    backgroundColor: '#e7f6ed',
+  },
+
+  pendingStatus: {
+    backgroundColor: '#fff1df',
+  },
+
+  partStatusText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+
+  completeStatusText: {
+    color: '#318653',
+  },
+
+  pendingStatusText: {
+    color: '#b77b36',
+  },
+
   price: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 15,
+    fontWeight: '700',
     color: '#d96b8a',
-    marginTop: 6,
+    marginTop: 8,
   },
 
   description: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#777',
     lineHeight: 20,
     marginTop: 8,
-    marginBottom: 6,
+    marginBottom: 5,
   },
 
   selectionBox: {
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#eee',
-    borderRadius: 10,
+    borderColor: '#F0E5E9',
+    borderRadius: 12,
     padding: 10,
-    marginTop: 10,
-    gap: 12,
+    marginTop: 11,
+    gap: 10,
+    backgroundColor: '#fff',
+    minHeight: 86,
   },
 
   disabledSelectionBox: {
@@ -823,43 +1242,71 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8f8f8',
   },
 
+  optionImageContainer: {
+    backgroundColor: '#fff5f8',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 4,
+  },
+
   optionImage: {
-    width: 66,
-    height: 66,
-    borderRadius: 8,
-    backgroundColor: '#f5f5f5',
+    width: 62,
+    height: 62,
+    borderRadius: 9,
+    overflow: 'hidden',
+  },
+
+  largeOptionImage: {
+    width: 76,
+    height: 76,
+    borderRadius: 9,
+    overflow: 'hidden',
+  },
+
+  imageContent: {
+    width: '100%',
+    height: '100%',
   },
 
   imagePlaceholder: {
+    backgroundColor: '#FBEAF0',
     justifyContent: 'center',
     alignItems: 'center',
+    gap: 3,
   },
 
   placeholderText: {
-    color: '#999',
-    fontSize: 10,
+    color: '#b77b91',
+    fontSize: 9,
     textAlign: 'center',
   },
 
   selectionInfo: {
     flex: 1,
+    minWidth: 0,
   },
 
   optionTitle: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#333',
   },
 
   optionText: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#888',
     marginTop: 4,
   },
 
   selectedOptionText: {
     color: '#d96b8a',
-    fontWeight: '600',
+    fontWeight: '700',
+  },
+
+  selectAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
   },
 
   changeText: {
@@ -869,47 +1316,56 @@ const styles = StyleSheet.create({
   },
 
   additionText: {
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 12,
+    fontWeight: '700',
     color: '#d96b8a',
     marginTop: 5,
   },
 
   quantityBox: {
     borderWidth: 1,
-    borderColor: '#eee',
-    borderRadius: 10,
+    borderColor: '#F0E5E9',
+    borderRadius: 12,
     padding: 12,
-    marginTop: 10,
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+
+  quantityHint: {
+    fontSize: 11,
+    color: '#999',
+    marginTop: 3,
   },
 
   quantityRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 10,
+    gap: 12,
   },
 
   quantityButton: {
-    width: 38,
-    height: 38,
+    width: 36,
+    height: 36,
     borderWidth: 1,
     borderColor: '#d96b8a',
-    borderRadius: 8,
+    borderRadius: 9,
     justifyContent: 'center',
     alignItems: 'center',
   },
 
-  quantityButtonText: {
-    fontSize: 22,
-    color: '#d96b8a',
-    fontWeight: '600',
+  quantityButtonDisabled: {
+    borderColor: '#ddd',
+    backgroundColor: '#f7f7f7',
   },
 
   quantityText: {
-    width: 50,
+    minWidth: 25,
     textAlign: 'center',
-    fontSize: 18,
-    fontWeight: '600',
+    fontSize: 17,
+    fontWeight: '700',
     color: '#333',
   },
 
@@ -924,81 +1380,135 @@ const styles = StyleSheet.create({
   },
 
   subtotalLabel: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
-    color: '#333',
+    color: '#555',
   },
 
   subtotalAmount: {
-    fontSize: 17,
-    fontWeight: '700',
+    fontSize: 18,
+    fontWeight: '800',
     color: '#d96b8a',
   },
 
   totalBox: {
     marginTop: 5,
     padding: 16,
-    borderRadius: 10,
-    backgroundColor: '#fdf1f5',
+    borderRadius: 12,
+    backgroundColor: '#FCEEF3',
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 10,
   },
 
   totalLabel: {
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: 17,
+    fontWeight: '800',
     color: '#333',
   },
 
+  totalHint: {
+    fontSize: 10,
+    color: '#927b84',
+    marginTop: 4,
+  },
+
   totalAmount: {
-    fontSize: 22,
-    fontWeight: '700',
+    fontSize: 21,
+    fontWeight: '800',
     color: '#d96b8a',
+  },
+
+  progressNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF5E8',
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 12,
+    gap: 8,
+  },
+
+  progressText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#8d672f',
   },
 
   continueButton: {
     backgroundColor: '#d96b8a',
-    borderRadius: 10,
-    padding: 15,
+    borderRadius: 12,
+    padding: 16,
     marginTop: 15,
     alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 9,
+  },
+
+  continueButtonDisabled: {
+    backgroundColor: '#D8B8C3',
   },
 
   continueButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
+    fontSize: 15,
+    fontWeight: '800',
     color: '#fff',
+    textAlign: 'center',
   },
 
   centered: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
+    padding: 25,
+  },
+
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#333',
+    textAlign: 'center',
+    marginTop: 12,
   },
 
   emptyText: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#888',
     textAlign: 'center',
-    marginTop: 8,
+    marginTop: 9,
     lineHeight: 20,
+  },
+
+  retryButton: {
+    backgroundColor: '#d96b8a',
+    paddingHorizontal: 22,
+    paddingVertical: 11,
+    borderRadius: 10,
+    marginTop: 15,
+  },
+
+  retryButtonText: {
+    color: '#fff',
+    fontWeight: '700',
   },
 
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'flex-end',
   },
 
   modalSheet: {
     height: '85%',
+    maxHeight: '90%',
     backgroundColor: '#fff',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingTop: 10,
-    paddingHorizontal: 18,
+    paddingHorizontal: 16,
     paddingBottom: 20,
   },
 
@@ -1023,13 +1533,13 @@ const styles = StyleSheet.create({
   },
 
   modalTitle: {
-    fontSize: 22,
-    fontWeight: '700',
+    fontSize: 21,
+    fontWeight: '800',
     color: '#333',
   },
 
   modalSubtitle: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#d96b8a',
     marginTop: 4,
   },
@@ -1041,18 +1551,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f5f5',
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 12,
-  },
-
-  closeButtonText: {
-    fontSize: 16,
-    color: '#555',
+    marginLeft: 10,
   },
 
   modalLoading: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    padding: 20,
   },
 
   modalList: {
@@ -1068,7 +1574,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 10,
     marginBottom: 10,
-    gap: 12,
+    gap: 10,
   },
 
   optionCardSelected: {
@@ -1078,17 +1584,18 @@ const styles = StyleSheet.create({
 
   optionCardInfo: {
     flex: 1,
+    minWidth: 0,
   },
 
   optionCardTitle: {
-    fontSize: 15,
-    fontWeight: '700',
+    fontSize: 14,
+    fontWeight: '800',
     color: '#333',
   },
 
   optionDescription: {
-    fontSize: 12,
-    lineHeight: 17,
+    fontSize: 11,
+    lineHeight: 16,
     color: '#888',
     marginTop: 4,
   },
@@ -1119,13 +1626,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 
-  emptyTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#333',
-    textAlign: 'center',
-  },
-
   modalFooter: {
     flexDirection: 'row',
     gap: 10,
@@ -1146,7 +1646,7 @@ const styles = StyleSheet.create({
 
   cancelButtonText: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#555',
   },
 
@@ -1164,8 +1664,9 @@ const styles = StyleSheet.create({
   },
 
   confirmButtonText: {
-    fontSize: 14,
-    fontWeight: '700',
+    fontSize: 13,
+    fontWeight: '800',
     color: '#fff',
+    textAlign: 'center',
   },
 });

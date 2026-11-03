@@ -13,10 +13,12 @@ import {
   RefreshControl,
 } from 'react-native';
 
+import { Ionicons } from '@expo/vector-icons';
+
 import { useFocusEffect } from '@react-navigation/native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import { RootStackParamList } from '../../navigator';
+import { RootStackParamList } from '../../../navigator';
 import { supabase } from '../../../supabase';
 
 type Props = NativeStackScreenProps<
@@ -41,56 +43,69 @@ export default function CustomerGarmentDetailsScreen({
 
   const [parts, setParts] = useState<GarmentPart[]>([]);
   const [selectedParts, setSelectedParts] = useState<string[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState('');
 
-  const getParts = async () => {
-    setLoading(true);
+  const [imageFailed, setImageFailed] = useState(false);
 
-    const { data, error } = await supabase
-      .from('garment_parts')
-      .select('id, name, description, price, gender, available')
-      .eq('garment_id', garment.id)
-      .eq('available', true)
-      .order('name');
-
-    if (error) {
-      console.log('Get garment parts error:', error.message);
-      Alert.alert('Error', 'Unable to load garment parts.');
-      setParts([]);
-      setLoading(false);
-      return;
+  // Load available parts for this garment.
+  const getParts = useCallback(async (isRefresh = false) => {
+    if (isRefresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
     }
 
-    setParts(data || []);
-    setLoading(false);
-  };
+    setLoadError('');
 
+    try {
+      const { data, error } = await supabase
+        .from('garment_parts')
+        .select('id, name, description, price, gender, available')
+        .eq('garment_id', garment.id)
+        .eq('available', true)
+        .order('name', { ascending: true });
+
+      if (error) {
+        throw error;
+      }
+
+      const availableParts = (data ?? []) as GarmentPart[];
+
+      setParts(availableParts);
+
+      // Remove selections for parts that are no longer available.
+      setSelectedParts((current) =>
+        current.filter((id) =>
+          availableParts.some((part) => part.id === id)
+        )
+      );
+    } catch (error) {
+      console.error('Get garment parts error:', error);
+
+      setLoadError(
+        'Unable to load garment parts. Please check your connection and try again.'
+      );
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [garment.id]);
+
+  // Reload when returning to this screen.
   useFocusEffect(
     useCallback(() => {
-      getParts();
-    }, [garment.id])
+      void getParts();
+    }, [getParts])
   );
 
-  const onRefresh = async () => {
-    setRefreshing(true);
-
-    const { data, error } = await supabase
-      .from('garment_parts')
-      .select('id, name, description, price, gender, available')
-      .eq('garment_id', garment.id)
-      .eq('available', true)
-      .order('name');
-
-    if (error) {
-      Alert.alert('Error', 'Unable to refresh garment parts.');
-    } else {
-      setParts(data || []);
-    }
-
-    setRefreshing(false);
+  const onRefresh = () => {
+    void getParts(true);
   };
 
+  // Select or deselect a garment part.
   const togglePart = (partId: string) => {
     setSelectedParts((current) =>
       current.includes(partId)
@@ -108,6 +123,7 @@ export default function CustomerGarmentDetailsScreen({
     0
   );
 
+  // Continue to part configuration.
   const continueOrder = () => {
     if (selectedParts.length === 0) {
       Alert.alert(
@@ -123,6 +139,7 @@ export default function CustomerGarmentDetailsScreen({
     });
   };
 
+  // Individual part card.
   const renderPart = ({ item }: { item: GarmentPart }) => {
     const selected = selectedParts.includes(item.id);
 
@@ -137,7 +154,9 @@ export default function CustomerGarmentDetailsScreen({
       >
         <View style={styles.cardHeader}>
           <View style={styles.partInfo}>
-            <Text style={styles.partName}>{item.name}</Text>
+            <Text style={styles.partName}>
+              {item.name}
+            </Text>
 
             <Text style={styles.gender}>
               {item.gender || 'Unspecified'}
@@ -151,7 +170,11 @@ export default function CustomerGarmentDetailsScreen({
             ]}
           >
             {selected && (
-              <Text style={styles.checkmark}>✓</Text>
+              <Ionicons
+                name="checkmark"
+                size={17}
+                color="#fff"
+              />
             )}
           </View>
         </View>
@@ -171,7 +194,7 @@ export default function CustomerGarmentDetailsScreen({
               selected && styles.selectedText,
             ]}
           >
-            {selected ? '✓ Selected' : 'Tap to Select'}
+            {selected ? 'selected' : 'Tap to Select'}
           </Text>
         </View>
       </TouchableOpacity>
@@ -186,38 +209,58 @@ export default function CustomerGarmentDetailsScreen({
         renderItem={renderPart}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.list}
+        keyboardShouldPersistTaps="handled"
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
             tintColor="#d96b8a"
+            colors={['#d96b8a']}
           />
         }
         ListHeaderComponent={
           <View>
-            {garment.image_url ? (
-              <Image
-                source={{ uri: garment.image_url }}
-                style={styles.garmentImage}
-                resizeMode="cover"
-              />
+            {/* Garment Image */}
+            {garment.image_url && !imageFailed ? (
+              <View style={styles.imageContainer}>
+                <Image
+                  source={{ uri: garment.image_url }}
+                  style={styles.garmentImage}
+                  resizeMode="contain"
+                  onError={() => setImageFailed(true)}
+                />
+              </View>
             ) : (
               <View style={styles.imagePlaceholder}>
+                <Ionicons
+                  name="shirt-outline"
+                  size={55}
+                  color="#d96b8a"
+                />
+
+                <Text style={styles.placeholderTitle}>
+                  PINK BLUSH
+                </Text>
+
                 <Text style={styles.placeholderText}>
-                  No Image Available
+                  Garment Collection
                 </Text>
               </View>
             )}
 
-            <Text style={styles.title}>{garment.name}</Text>
+            {/* Garment Information */}
+            <Text style={styles.title}>
+              {garment.name}
+            </Text>
 
             <Text style={styles.description}>
               {garment.description ||
                 'No description available.'}
             </Text>
 
+            {/* Parts Header */}
             <View style={styles.sectionHeader}>
-              <View>
+              <View style={styles.sectionInfo}>
                 <Text style={styles.sectionTitle}>
                   Select Garment Parts
                 </Text>
@@ -238,13 +281,48 @@ export default function CustomerGarmentDetailsScreen({
         ListEmptyComponent={
           loading ? (
             <View style={styles.emptyContainer}>
-              <ActivityIndicator size="large" color="#d96b8a" />
+              <ActivityIndicator
+                size="large"
+                color="#d96b8a"
+              />
+
               <Text style={styles.emptyText}>
                 Loading garment parts...
               </Text>
             </View>
+          ) : loadError ? (
+            <View style={styles.emptyContainer}>
+              <Ionicons
+                name="cloud-offline-outline"
+                size={45}
+                color="#d96b8a"
+              />
+
+              <Text style={styles.emptyTitle}>
+                Unable to Load Parts
+              </Text>
+
+              <Text style={styles.emptyText}>
+                {loadError}
+              </Text>
+
+              <TouchableOpacity
+                style={styles.retryButton}
+                onPress={() => void getParts()}
+              >
+                <Text style={styles.retryButtonText}>
+                  Try Again
+                </Text>
+              </TouchableOpacity>
+            </View>
           ) : (
             <View style={styles.emptyContainer}>
+              <Ionicons
+                name="shirt-outline"
+                size={45}
+                color="#d96b8a"
+              />
+
               <Text style={styles.emptyTitle}>
                 No Parts Available
               </Text>
@@ -257,13 +335,15 @@ export default function CustomerGarmentDetailsScreen({
           )
         }
         ListFooterComponent={
-          !loading && parts.length > 0 ? (
+          !loading && !loadError && parts.length > 0 ? (
             <View style={styles.footer}>
+              {/* Selection Summary */}
               <View style={styles.summary}>
                 <View>
                   <Text style={styles.summaryLabel}>
                     Selected Parts
                   </Text>
+
                   <Text style={styles.summaryCount}>
                     {selectedParts.length} part(s)
                   </Text>
@@ -273,12 +353,14 @@ export default function CustomerGarmentDetailsScreen({
                   <Text style={styles.summaryLabel}>
                     Parts Total
                   </Text>
+
                   <Text style={styles.totalPrice}>
                     ₱{totalPrice.toFixed(2)}
                   </Text>
                 </View>
               </View>
 
+              {/* Continue Button */}
               <TouchableOpacity
                 style={[
                   styles.continueButton,
@@ -292,6 +374,12 @@ export default function CustomerGarmentDetailsScreen({
                 <Text style={styles.continueButtonText}>
                   Continue to Configure
                 </Text>
+
+                <Ionicons
+                  name="arrow-forward"
+                  size={19}
+                  color="#fff"
+                />
               </TouchableOpacity>
             </View>
           ) : null
@@ -310,29 +398,48 @@ const styles = StyleSheet.create({
   list: {
     padding: 18,
     paddingBottom: 35,
+    flexGrow: 1,
   },
 
-  garmentImage: {
+  imageContainer: {
     width: '100%',
     height: 230,
     borderRadius: 16,
     marginBottom: 18,
-    backgroundColor: '#F3E8EC',
+    backgroundColor: '#FFF0F5',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 10,
+    overflow: 'hidden',
+  },
+
+  garmentImage: {
+    width: '100%',
+    height: '100%',
   },
 
   imagePlaceholder: {
     width: '100%',
     height: 230,
     borderRadius: 16,
-    backgroundColor: '#F3E8EC',
+    backgroundColor: '#FBEAF0',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 18,
   },
 
+  placeholderTitle: {
+    color: '#D96B8A',
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 1.5,
+    marginTop: 8,
+  },
+
   placeholderText: {
-    color: '#999',
-    fontSize: 14,
+    color: '#B77B91',
+    fontSize: 12,
+    marginTop: 4,
   },
 
   title: {
@@ -354,6 +461,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 16,
+    gap: 8,
+  },
+
+  sectionInfo: {
+    flex: 1,
   },
 
   sectionTitle: {
@@ -426,12 +538,6 @@ const styles = StyleSheet.create({
   selectedCheckbox: {
     backgroundColor: '#D96B8A',
     borderColor: '#D96B8A',
-  },
-
-  checkmark: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '800',
   },
 
   gender: {
@@ -511,7 +617,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#D96B8A',
     borderRadius: 12,
     paddingVertical: 16,
+    paddingHorizontal: 18,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 9,
   },
 
   disabledButton: {
@@ -526,6 +636,7 @@ const styles = StyleSheet.create({
 
   emptyContainer: {
     paddingVertical: 35,
+    paddingHorizontal: 15,
     alignItems: 'center',
   },
 
@@ -533,6 +644,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: '#333',
+    marginTop: 10,
     marginBottom: 7,
   },
 
@@ -542,5 +654,18 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 10,
     lineHeight: 20,
+  },
+
+  retryButton: {
+    marginTop: 15,
+    backgroundColor: '#D96B8A',
+    paddingHorizontal: 22,
+    paddingVertical: 11,
+    borderRadius: 10,
+  },
+
+  retryButtonText: {
+    color: '#fff',
+    fontWeight: '700',
   },
 });

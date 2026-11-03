@@ -141,7 +141,6 @@ export default function CustomOrderScreen() {
     setImageExtension('jpg');
   };
 
-  // Save the selected date, then close the Android picker.
   const handleDateValueChange = (
     event: any,
     selectedDate?: Date,
@@ -164,6 +163,7 @@ export default function CustomOrderScreen() {
     setShowDatePicker(false);
   };
 
+  // Prepare the custom order and continue to measurements.
   const submitCustomOrder = async () => {
     const cleanDescription = description.trim();
     const cleanColor = preferredColor.trim();
@@ -211,11 +211,12 @@ export default function CustomOrderScreen() {
       if (userError || !user) {
         Alert.alert(
           'Sign in required',
-          'Please log in before submitting a custom order.',
+          'Please log in before continuing.',
         );
         return;
       }
 
+      // Upload the reference image if one was selected.
       if (imageBase64) {
         const imageBytes = decode(imageBase64);
 
@@ -241,66 +242,48 @@ export default function CustomOrderScreen() {
             upsert: false,
           });
 
-        if (uploadError) throw uploadError;
+        if (uploadError) {
+          throw uploadError;
+        }
 
         imagePath = uploadData.path;
 
-        console.log('Custom reference image uploaded:', {
-          path: imagePath,
-          type: imageType,
-          size: imageBytes.byteLength,
-        });
+        console.log('Custom reference image uploaded:', imagePath);
       }
 
-      const { error: insertError } = await supabase
-        .from('custom_orders')
-        .insert({
-          user_id: user.id,
-          reference_image_url: imagePath,
-          garment_description: cleanDescription,
-          preferred_color: cleanColor || null,
-          fabric_preference: cleanFabric || null,
-          needed_by_date: neededByDate
+      // Navigate to the existing measurements screen.
+      navigation.navigate('OrderMeasurements', {
+        customOrderData: {
+          referenceImagePath: imagePath,
+          garmentDescription: cleanDescription,
+          preferredColor: cleanColor || null,
+          fabricPreference: cleanFabric || null,
+          neededByDate: neededByDate
             ? formatDateForStorage(neededByDate)
             : null,
-          special_instructions: cleanInstructions || null,
-          status: 'submitted',
-        });
+          specialInstructions: cleanInstructions || null,
+        },
+      });
+    } catch (error: any) {
+      console.error('Custom order preparation error:', error);
 
-      if (insertError) {
-        if (imagePath) {
-          const { error: cleanupError } = await supabase.storage
-            .from('custom-order-images')
-            .remove([imagePath]);
+      if (imagePath) {
+        const { error: cleanupError } = await supabase.storage
+          .from('custom-order-images')
+          .remove([imagePath]);
 
-          if (cleanupError) {
-            console.warn(
-              'Image cleanup failed:',
-              cleanupError.message,
-            );
-          }
+        if (cleanupError) {
+          console.warn(
+            'Image cleanup failed:',
+            cleanupError.message,
+          );
         }
-
-        throw insertError;
       }
 
       Alert.alert(
-        'Request submitted!',
-        'Your custom garment request has been submitted. Please wait for staff to review your request and provide a quotation.',
-        [
-          {
-            text: 'OK',
-            onPress: () => navigation.goBack(),
-          },
-        ],
-      );
-    } catch (error: any) {
-      console.error('Custom order submission error:', error);
-
-      Alert.alert(
-        'Submission failed',
+        'Unable to continue',
         error?.message ||
-          'Unable to submit your request. Please try again.',
+          'Unable to prepare your custom request. Please try again.',
       );
     } finally {
       setLoading(false);
@@ -327,7 +310,7 @@ export default function CustomOrderScreen() {
           <Image
             source={{ uri: imageUri }}
             style={styles.referenceImage}
-            resizeMode="cover"
+            resizeMode="contain"
           />
 
           <TouchableOpacity
@@ -484,15 +467,22 @@ export default function CustomOrderScreen() {
         {instructions.length}/1500 characters
       </Text>
 
-      <View style={styles.notice}>
-        <Text style={styles.noticeTitle}>What happens next?</Text>
-        <Text style={styles.noticeText}>
-          1. Submit your garment request.
-          {'\n'}2. Staff review your design and preferences.
-          {'\n'}3. Staff prepare a quotation and estimated completion date.
-          {'\n'}4. Review the quotation before proceeding.
-        </Text>
-      </View>
+        <View style={styles.notice}>
+            <Text style={styles.noticeTitle}>Custom Order Information</Text>
+
+            <Text style={styles.noticeText}>
+                • Your design request will be reviewed by our staff.
+                {'\n\n'}• Our staff will evaluate your design, fabric preference,
+                and measurements.
+                {'\n\n'}• A quotation will be provided before production.
+                {'\n\n'}• You must accept the quotation before paying the
+                required deposit.
+                {'\n\n'}• Deposit payments are made online through GCash
+                or PayPal.
+                {'\n\n'}• The remaining balance is paid in cash when
+                collecting your finished garment.
+            </Text>
+        </View>
 
       <TouchableOpacity
         style={[
@@ -506,14 +496,16 @@ export default function CustomOrderScreen() {
           <ActivityIndicator color="#FFFFFF" />
         ) : (
           <Text style={styles.submitButtonText}>
-            Submit Custom Request
+            Continue to Measurements
           </Text>
         )}
       </TouchableOpacity>
 
-      <Text style={styles.footer}>
-        Submitting a request does not confirm an order or set a final price.
-      </Text>
+        <Text style={styles.footer}>
+            No payment is required at this stage. Your custom order
+            will only be submitted after you review and confirm
+            your details.
+        </Text>
     </ScrollView>
   );
 }
@@ -582,10 +574,10 @@ const styles = StyleSheet.create({
   },
   referenceImage: {
     width: '100%',
-    height: 260,
+    height: 300,
     borderRadius: 14,
-    backgroundColor: '#F3E4EA',
-  },
+    backgroundColor: '#FFFFFF',
+    },
   removeButton: {
     marginTop: 10,
     paddingVertical: 8,

@@ -26,7 +26,7 @@ import {
 
 import {
   RootStackParamList,
-} from '../../navigator';
+} from '../../../navigator';
 
 import { supabase } from '../../../supabase';
 

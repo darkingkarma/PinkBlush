@@ -15,7 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import { RootStackParamList } from '../../navigator';
+import { RootStackParamList } from '../../../navigator';
 import { supabase } from '../../../supabase';
 
 type Props = NativeStackScreenProps<

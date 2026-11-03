@@ -1,4 +1,3 @@
-
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -7,11 +6,12 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+
 import { useNavigation } from '@react-navigation/native';
-import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../../supabase';
 
 type Payment = {
@@ -37,9 +37,16 @@ type CatalogOrder = {
   payments: Payment[];
 };
 
+type ProductionProgress = {
+  status: string;
+  updated_at: string | null;
+};
+
+// CATALOG ORDER STATUSES
 type FilterType =
   | 'All'
   | 'Pending'
+  | 'Accepted'
   | 'In Production'
   | 'Ready for Release'
   | 'Completed'
@@ -48,16 +55,34 @@ type FilterType =
 const FILTERS: FilterType[] = [
   'All',
   'Pending',
+  'Accepted',
   'In Production',
   'Ready for Release',
   'Completed',
   'Cancelled',
 ];
 
+// PRODUCTION TRACKING STATUSES
+const PROGRESS_FILTERS = [
+  'All',
+  'assigned',
+  'cutting',
+  'sewing',
+  'fitting',
+  'finishing',
+  'ready_for_pickup',
+  'completed',
+];
+
 const PINK = '#D96B8A';
 const DARK_PINK = '#B84470';
+const BACKGROUND = '#FFF9FB';
+const TEXT_DARK = '#392831';
+const TEXT_MUTED = '#8D7780';
 
-const formatMoney = (amount: number | string | null | undefined) => {
+const formatMoney = (
+  amount: number | string | null | undefined
+) => {
   const value = Number(amount ?? 0);
 
   return `₱${(Number.isFinite(value) ? value : 0).toLocaleString(
@@ -69,13 +94,29 @@ const formatMoney = (amount: number | string | null | undefined) => {
   )}`;
 };
 
-const normalizeStatus = (status: string | null | undefined) =>
+// NORMALIZE STATUS VALUES
+const normalizeStatus = (
+  status: string | null | undefined
+) =>
   (status ?? 'Pending')
     .toLowerCase()
     .replace(/[_-]/g, ' ')
-    .trim();
+    .trim()
+    .replace(/\s+/g, ' ');
 
-const displayStatus = (status: string | null | undefined) => {
+// NORMALIZE PRODUCTION STATUS FOR FILTERING
+const normalizeProgress = (
+  status: string | null | undefined
+) =>
+  (status ?? '')
+    .toLowerCase()
+    .trim()
+    .replace(/[\s-]+/g, '_');
+
+// DISPLAY STATUS
+const displayStatus = (
+  status: string | null | undefined
+) => {
   const normalized = normalizeStatus(status);
 
   return normalized.replace(/\b\w/g, (letter) =>
@@ -83,6 +124,7 @@ const displayStatus = (status: string | null | undefined) => {
   );
 };
 
+// CATALOG ORDER STATUS FILTERING
 const matchesFilter = (
   status: string | null | undefined,
   filter: FilterType
@@ -91,41 +133,49 @@ const matchesFilter = (
 
   const normalized = normalizeStatus(status);
 
-  if (filter === 'Pending') {
-    return normalized.includes('pending');
-  }
+  switch (filter) {
+    case 'Pending':
+      return normalized === 'pending';
 
-  if (filter === 'In Production') {
-    return normalized.includes('in production');
-  }
+    case 'Accepted':
+      return normalized === 'accepted';
 
-  if (filter === 'Ready for Release') {
-    return normalized.includes('ready for release');
-  }
+    case 'In Production':
+      return normalized === 'in production';
 
-  if (filter === 'Completed') {
-    return normalized.includes('completed');
-  }
+    case 'Ready for Release':
+      return normalized === 'ready for release';
 
-  if (filter === 'Cancelled') {
-    return (
-      normalized.includes('cancelled') ||
-      normalized.includes('canceled')
-    );
-  }
+    case 'Completed':
+      return normalized === 'completed';
 
-  return true;
+    case 'Cancelled':
+      return normalized === 'cancelled';
+
+    default:
+      return true;
+  }
 };
 
 export default function CatalogOrdersScreen() {
   const navigation = useNavigation<any>();
 
   const [orders, setOrders] = useState<CatalogOrder[]>([]);
+
+  const [productionProgress, setProductionProgress] = useState<
+    Record<string, ProductionProgress>
+  >({});
+
   const [activeFilter, setActiveFilter] =
     useState<FilterType>('All');
+
+  const [progressFilter, setProgressFilter] = useState('All');
+
+  const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  // LOAD CATALOG ORDERS
   const loadOrders = useCallback(async () => {
     try {
       const { data: orderRows, error: ordersError } =
@@ -140,6 +190,7 @@ export default function CatalogOrdersScreen() {
 
       if (!orderRows || orderRows.length === 0) {
         setOrders([]);
+        setProductionProgress({});
         return;
       }
 
@@ -153,29 +204,41 @@ export default function CatalogOrdersScreen() {
         profilesResult,
         itemsResult,
         paymentsResult,
+        productionResult,
       ] = await Promise.all([
+        // CUSTOMER DETAILS
         supabase
           .from('profiles')
           .select('id, username, full_name, contact_number')
           .in('id', customerIds),
 
+        // ORDER ITEMS
         supabase
           .from('order_items')
           .select('id, order_id')
           .in('order_id', orderIds),
 
+        // PAYMENT DETAILS
         supabase
           .from('payments')
           .select(
             'id, order_id, payment_type, payment_method, amount, status, transaction_id, paid_at'
           )
           .in('order_id', orderIds),
+
+        // PRODUCTION TRACKING
+        supabase
+          .from('production_tracking')
+          .select('id, order_id, status, updated_at')
+          .in('order_id', orderIds)
+          .order('updated_at', { ascending: false }),
       ]);
 
       const results = [
         profilesResult,
         itemsResult,
         paymentsResult,
+        productionResult,
       ];
 
       const failedResult = results.find(
@@ -189,11 +252,28 @@ export default function CatalogOrdersScreen() {
       const profiles = profilesResult.data ?? [];
       const orderItems = itemsResult.data ?? [];
       const payments = paymentsResult.data ?? [];
+      const productionRecords = productionResult.data ?? [];
 
+      // GET LATEST PRODUCTION RECORD PER ORDER
+      const progressMap: Record<string, ProductionProgress> = {};
+
+      productionRecords.forEach((record: any) => {
+        if (record.order_id && !progressMap[record.order_id]) {
+          progressMap[record.order_id] = {
+            status: record.status,
+            updated_at: record.updated_at,
+          };
+        }
+      });
+
+      setProductionProgress(progressMap);
+
+      // MAP CUSTOMER PROFILES
       const profileMap = new Map(
         profiles.map((profile) => [profile.id, profile])
       );
 
+      // MAP ORDERS
       const mappedOrders: CatalogOrder[] = orderRows.map(
         (order) => {
           const profile = profileMap.get(order.customer_id);
@@ -248,6 +328,7 @@ export default function CatalogOrdersScreen() {
     loadOrders();
   };
 
+  // OPEN MANAGE ORDER
   const openManageOrder = (orderId: string) => {
     navigation.navigate('ManageOrder', {
       orderId,
@@ -255,10 +336,48 @@ export default function CatalogOrdersScreen() {
     });
   };
 
-  const filteredOrders = orders.filter((order) =>
-    matchesFilter(order.status, activeFilter)
-  );
+  // FILTER ORDERS
+  const filteredOrders = orders.filter((order) => {
+    // CATALOG ORDER STATUS FILTER
+    const matchesStatus = matchesFilter(
+      order.status,
+      activeFilter
+    );
 
+    // PRODUCTION PROGRESS FILTER
+    const currentProgress = normalizeProgress(
+      productionProgress[order.id]?.status
+    );
+
+    const matchesProgress =
+      progressFilter === 'All' ||
+      currentProgress === normalizeProgress(progressFilter);
+
+    // SEARCH FILTER
+    const search = searchQuery.trim().toLowerCase();
+
+    const orderId = order.id.toLowerCase();
+    const shortOrderId = order.id.slice(0, 8).toLowerCase();
+
+    const matchesSearch =
+      !search ||
+      orderId.includes(search) ||
+      shortOrderId.includes(search) ||
+      order.customerName.toLowerCase().includes(search) ||
+      order.customerContact.toLowerCase().includes(search) ||
+      displayStatus(order.status).toLowerCase().includes(search) ||
+      displayStatus(
+        productionProgress[order.id]?.status
+      ).toLowerCase().includes(search);
+
+    return (
+      matchesStatus &&
+      matchesProgress &&
+      matchesSearch
+    );
+  });
+
+  // GET TOTAL PAID DEPOSIT
   const getPaidDeposit = (order: CatalogOrder) =>
     order.payments
       .filter(
@@ -271,16 +390,19 @@ export default function CatalogOrdersScreen() {
         0
       );
 
+  // GET DEPOSIT PAYMENT
   const getDepositPayment = (order: CatalogOrder) =>
     order.payments.find(
       (payment) =>
         normalizeStatus(payment.payment_type) === 'deposit'
     );
 
+  // LOADING SCREEN
   if (loading) {
     return (
-      <View style={styles.center}>
+      <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={PINK} />
+
         <Text style={styles.loadingText}>
           Loading catalog orders...
         </Text>
@@ -290,66 +412,127 @@ export default function CatalogOrdersScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Heading with Total Order Count */}
-      <View style={styles.heading}>
-        <View style={styles.headingIcon}>
-          <Ionicons
-            name="shirt-outline"
-            size={25}
-            color={PINK}
+      {/* HEADING AND SEARCH */}
+      <View style={styles.topSection}>
+        <View style={styles.headingRow}>
+          <View>
+            <Text style={styles.sectionTitle}>
+              Catalog Orders
+            </Text>
+
+            <Text style={styles.orderCount}>
+              {filteredOrders.length} of {orders.length} orders
+            </Text>
+          </View>
+        </View>
+
+        {/* SEARCH BAR */}
+        <View style={styles.searchContainer}>
+          <Text style={styles.searchIcon}>⌕</Text>
+
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search customer, order ID, or contact..."
+            placeholderTextColor="#A9959D"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCapitalize="none"
+            returnKeyType="search"
           />
+
+          {searchQuery.length > 0 && (
+            <TouchableOpacity
+              onPress={() => setSearchQuery('')}
+              style={styles.clearButton}
+            >
+              <Text style={styles.clearSearch}>×</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
-        <View style={styles.headingText}>
-          <Text style={styles.title}>Catalog Orders</Text>
-          <Text style={styles.subtitle}>
-            View and manage customer garment orders.
+        {/* CATALOG ORDER STATUS FILTERS */}
+        <View style={styles.progressHeader}>
+          <Text style={styles.progressTitle}>
+            Catalog Order Status
           </Text>
         </View>
 
-        <View style={styles.totalCountBadge}>
-          <Text style={styles.totalCountNumber}>
-            {orders.length}
-          </Text>
-          <Text style={styles.totalCountLabel}>
-            Total Orders
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filterContainer}
+        >
+          {FILTERS.map((filter) => {
+            const selected = activeFilter === filter;
+
+            return (
+              <TouchableOpacity
+                key={filter}
+                style={[
+                  styles.filterButton,
+                  selected && styles.filterButtonActive,
+                ]}
+                onPress={() => setActiveFilter(filter)}
+                activeOpacity={0.8}
+              >
+                <Text
+                  style={[
+                    styles.filterText,
+                    selected && styles.filterTextActive,
+                  ]}
+                >
+                  {filter}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+
+        {/* PRODUCTION PROGRESS FILTER */}
+        <View style={styles.progressHeader}>
+          <Text style={styles.progressTitle}>
+            Production Progress
           </Text>
         </View>
+
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.progressFilterContainer}
+        >
+          {PROGRESS_FILTERS.map((item) => {
+            const selected = progressFilter === item;
+
+            const label =
+              item === 'All'
+                ? 'All'
+                : displayStatus(item);
+
+            return (
+              <TouchableOpacity
+                key={item}
+                style={[
+                  styles.progressFilterButton,
+                  selected && styles.progressFilterButtonActive,
+                ]}
+                onPress={() => setProgressFilter(item)}
+                activeOpacity={0.8}
+              >
+                <Text
+                  style={[
+                    styles.progressFilterText,
+                    selected && styles.progressFilterTextActive,
+                  ]}
+                >
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
       </View>
 
-      {/* Filters */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.filterScroll}
-        contentContainerStyle={styles.filterContent}
-      >
-        {FILTERS.map((filter) => {
-          const selected = activeFilter === filter;
-
-          return (
-            <TouchableOpacity
-              key={filter}
-              style={[
-                styles.filterButton,
-                selected && styles.filterButtonActive,
-              ]}
-              onPress={() => setActiveFilter(filter)}
-            >
-              <Text
-                style={[
-                  styles.filterText,
-                  selected && styles.filterTextActive,
-                ]}
-              >
-                {filter}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-
-      {/* Orders List */}
+      {/* ORDERS LIST */}
       <ScrollView
         style={styles.orderList}
         contentContainerStyle={styles.orderListContent}
@@ -360,215 +543,189 @@ export default function CatalogOrdersScreen() {
             tintColor={PINK}
           />
         }
+        showsVerticalScrollIndicator={false}
       >
         {filteredOrders.length === 0 ? (
-          <View style={styles.emptyCard}>
-            <Ionicons
-              name="receipt-outline"
-              size={42}
-              color="#C4A5B0"
-            />
-
+          <View style={styles.emptyContainer}>
             <Text style={styles.emptyTitle}>
-              No Catalog Orders Found
+              {searchQuery ||
+              activeFilter !== 'All' ||
+              progressFilter !== 'All'
+                ? 'No matching orders'
+                : 'No catalog orders yet'}
             </Text>
 
             <Text style={styles.emptyText}>
-              There are no catalog orders under this filter yet.
+              {searchQuery ||
+              activeFilter !== 'All' ||
+              progressFilter !== 'All'
+                ? 'Try changing your search or filters.'
+                : 'Customer catalog orders will appear here.'}
             </Text>
+
+            {(searchQuery.length > 0 ||
+              activeFilter !== 'All' ||
+              progressFilter !== 'All') && (
+              <TouchableOpacity
+                style={styles.clearFiltersButton}
+                onPress={() => {
+                  setSearchQuery('');
+                  setActiveFilter('All');
+                  setProgressFilter('All');
+                }}
+              >
+                <Text style={styles.clearFiltersText}>
+                  Clear Search and Filters
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : (
-          filteredOrders.map((order) => {
-            const total = Number(order.total_amount ?? 0);
-            const paidDeposit = getPaidDeposit(order);
-            const depositPayment = getDepositPayment(order);
+          <View style={styles.ordersGrid}>
+            {filteredOrders.map((order) => {
+              const total = Number(order.total_amount ?? 0);
+              const paidDeposit = getPaidDeposit(order);
+              const depositPayment = getDepositPayment(order);
 
-            const depositStatus = depositPayment
-              ? displayStatus(depositPayment.status)
-              : 'No Payment';
+              const depositStatus = depositPayment
+                ? displayStatus(depositPayment.status)
+                : 'No Payment';
 
-            const isDepositPaid =
-              normalizeStatus(depositPayment?.status) === 'paid';
+              const isDepositPaid =
+                normalizeStatus(depositPayment?.status) === 'paid';
 
-            return (
-              <View key={order.id} style={styles.orderCard}>
-                {/* Order Header */}
-                <View style={styles.orderTop}>
-                  <View style={styles.orderTitleArea}>
-                    <View style={styles.orderIcon}>
-                      <Ionicons
-                        name="receipt-outline"
-                        size={19}
-                        color={DARK_PINK}
-                      />
-                    </View>
+              const currentProgress =
+                productionProgress[order.id]?.status || null;
 
-                    <View style={styles.orderHeading}>
+              return (
+                <View key={order.id} style={styles.orderCard}>
+                  {/* ORDER HEADER */}
+                  <View style={styles.cardHeader}>
+                    <View style={styles.cardTitleContainer}>
                       <Text style={styles.orderTitle}>
                         Catalog Order
                       </Text>
 
                       <Text style={styles.orderId}>
-                        #{order.id.slice(0, 8).toUpperCase()}
+                        Order ID: #{order.id.slice(0, 8).toUpperCase()}
+                      </Text>
+                    </View>
+
+                    <View style={styles.statusBadge}>
+                      <Text style={styles.statusText}>
+                        {displayStatus(order.status)}
                       </Text>
                     </View>
                   </View>
 
-                  <View style={styles.statusBadge}>
-                    <Text style={styles.statusText}>
-                      {displayStatus(order.status)}
+                  {/* SUBMITTED DATE */}
+                    <Text style={styles.submittedDate}>
+                        Submitted{' '}
+                        {order.created_at
+                            ? new Date(order.created_at).toLocaleString('en-PH', {
+                                year: 'numeric',
+                                month: 'short',
+                                day: 'numeric',
+                                hour: 'numeric',
+                                minute: '2-digit',
+                                hour12: true,
+                            })
+                        : 'Date unavailable'}
+                    </Text>
+                  {/* CURRENT PRODUCTION STAGE */}
+                  <View style={styles.productionProgressBox}>
+                    <Text style={styles.progressCardLabel}>
+                      Production Progress
+                    </Text>
+
+                    <Text style={styles.progressCardValue}>
+                      {currentProgress
+                        ? displayStatus(currentProgress)
+                        : 'Not Started'}
                     </Text>
                   </View>
-                </View>
 
-                {/* Date */}
-                <View style={styles.dateRow}>
-                  <Ionicons
-                    name="calendar-outline"
-                    size={15}
-                    color="#9B7784"
-                  />
+                  <View style={styles.divider} />
 
-                  <Text style={styles.dateText}>
-                    {order.created_at
-                      ? new Date(order.created_at).toLocaleDateString(
-                          'en-PH',
-                          {
-                            year: 'numeric',
-                            month: 'short',
-                            day: 'numeric',
-                          }
-                        )
-                      : 'Date unavailable'}
+                  {/* CUSTOMER */}
+                  <Text style={styles.infoLabel}>Customer</Text>
+
+                  <Text style={styles.customerName}>
+                    {order.customerName}
                   </Text>
-                </View>
 
-                <View style={styles.divider} />
+                  <Text style={styles.contactText}>
+                    {order.customerContact || 'No contact number'}
+                  </Text>
 
-                {/* Customer */}
-                <View style={styles.customerRow}>
-                  <View style={styles.customerIcon}>
-                    <Ionicons
-                      name="person-outline"
-                      size={18}
-                      color={PINK}
-                    />
-                  </View>
-
-                  <View style={styles.customerDetails}>
-                    <Text style={styles.smallLabel}>
-                      CUSTOMER
-                    </Text>
-
-                    <Text style={styles.customerName}>
-                      {order.customerName}
-                    </Text>
-
-                    {order.customerContact ? (
-                      <Text style={styles.customerContact}>
-                        {order.customerContact}
-                      </Text>
-                    ) : null}
-                  </View>
-                </View>
-
-                {/* Order Summary */}
-                <View style={styles.infoGrid}>
-                  <View style={styles.infoBox}>
-                    <Text style={styles.smallLabel}>
-                      ITEMS
-                    </Text>
-
-                    <View style={styles.infoValueRow}>
-                      <Ionicons
-                        name="shirt-outline"
-                        size={16}
-                        color={DARK_PINK}
-                      />
+                  {/* ORDER SUMMARY */}
+                  <View style={styles.detailsGrid}>
+                    <View style={styles.detailItem}>
+                      <Text style={styles.infoLabel}>Items</Text>
 
                       <Text style={styles.infoValue}>
                         {order.itemCount}
                       </Text>
                     </View>
-                  </View>
 
-                  <View style={styles.infoBox}>
-                    <Text style={styles.smallLabel}>
-                      ORDER TOTAL
-                    </Text>
+                    <View style={styles.detailItem}>
+                      <Text style={styles.infoLabel}>Order Total</Text>
 
-                    <Text style={styles.totalValue}>
-                      {formatMoney(total)}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* Deposit Status */}
-                <View style={styles.depositRow}>
-                  <View style={styles.depositLeft}>
-                    <Ionicons
-                      name="wallet-outline"
-                      size={17}
-                      color="#8C6674"
-                    />
-
-                    <View>
-                      <Text style={styles.depositTitle}>
-                        Deposit Payment
-                      </Text>
-
-                      <Text style={styles.depositAmount}>
-                        {formatMoney(paidDeposit)} paid
+                      <Text style={styles.totalValue}>
+                        {formatMoney(total)}
                       </Text>
                     </View>
                   </View>
 
-                  <View
-                    style={[
-                      styles.paymentBadge,
-                      isDepositPaid
-                        ? styles.paidBadge
-                        : styles.unpaidBadge,
-                    ]}
-                  >
-                    <Text
+                  {/* DEPOSIT STATUS */}
+                  <View style={styles.depositRow}>
+                    <View style={styles.depositLeft}>
+                      <View>
+                        <Text style={styles.depositTitle}>
+                          Deposit Payment
+                        </Text>
+
+                        <Text style={styles.depositAmount}>
+                          {formatMoney(paidDeposit)} paid
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View
                       style={[
-                        styles.paymentBadgeText,
+                        styles.paymentBadge,
                         isDepositPaid
-                          ? styles.paidText
-                          : styles.unpaidText,
+                          ? styles.paidBadge
+                          : styles.unpaidBadge,
                       ]}
                     >
-                      {depositStatus}
-                    </Text>
+                      <Text
+                        style={[
+                          styles.paymentBadgeText,
+                          isDepositPaid
+                            ? styles.paidText
+                            : styles.unpaidText,
+                        ]}
+                      >
+                        {depositStatus}
+                      </Text>
+                    </View>
                   </View>
+
+                  {/* MANAGE ORDER */}
+                  <TouchableOpacity
+                    style={styles.manageOrderButton}
+                    onPress={() => openManageOrder(order.id)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.manageOrderButtonText}>
+                      Manage Order
+                    </Text>
+                  </TouchableOpacity>
                 </View>
-
-                {/* Manage Order */}
-                <TouchableOpacity
-                  style={styles.manageOrderButton}
-                  onPress={() => openManageOrder(order.id)}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons
-                    name="settings-outline"
-                    size={18}
-                    color="#FFFFFF"
-                  />
-
-                  <Text style={styles.manageOrderButtonText}>
-                    Manage Order
-                  </Text>
-
-                  <Ionicons
-                    name="chevron-forward"
-                    size={17}
-                    color="#FFFFFF"
-                  />
-                </TouchableOpacity>
-              </View>
-            );
-          })
+              );
+            })}
+          </View>
         )}
       </ScrollView>
     </View>
@@ -578,111 +735,151 @@ export default function CatalogOrdersScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFF8FA',
-    paddingTop: 12,
+    backgroundColor: BACKGROUND,
   },
 
-  center: {
+  loadingContainer: {
     flex: 1,
+    backgroundColor: BACKGROUND,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FFF8FA',
   },
 
   loadingText: {
-    marginTop: 12,
-    color: '#8C6674',
+    color: TEXT_MUTED,
+    fontSize: 12,
+    marginTop: 10,
   },
 
-  heading: {
+  topSection: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 4,
+    backgroundColor: BACKGROUND,
+  },
+
+  headingRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    marginBottom: 14,
+    justifyContent: 'space-between',
+    marginBottom: 8,
   },
 
-  headingIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: 14,
-    backgroundColor: '#FCE7F0',
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: TEXT_DARK,
+  },
+
+  orderCount: {
+    fontSize: 10,
+    color: TEXT_MUTED,
+    marginTop: 2,
+  },
+
+  searchContainer: {
+    height: 39,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#F0DFE5',
+    borderRadius: 9,
+    paddingHorizontal: 10,
+    marginBottom: 7,
   },
 
-  headingText: {
-    flex: 1,
-    marginLeft: 10,
-  },
-
-  title: {
+  searchIcon: {
     fontSize: 20,
-    fontWeight: '800',
-    color: '#3F2630',
+    color: TEXT_MUTED,
+    marginRight: 7,
   },
 
-  subtitle: {
-    fontSize: 11,
-    color: '#8C6674',
-    marginTop: 3,
+  searchInput: {
+    flex: 1,
+    fontSize: 12,
+    color: TEXT_DARK,
+    paddingVertical: 0,
   },
 
-  totalCountBadge: {
-    backgroundColor: '#FCE7F0',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+  clearButton: {
+    paddingHorizontal: 4,
+  },
+
+  clearSearch: {
+    fontSize: 21,
+    color: TEXT_MUTED,
+  },
+
+  filterContainer: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 8,
-  },
-
-  totalCountNumber: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: DARK_PINK,
-  },
-
-  totalCountLabel: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#8B3455',
-  },
-
-  filterScroll: {
-    maxHeight: 46,
-    flexGrow: 0,
-  },
-
-  filterContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 8,
-    gap: 8,
-    alignItems: 'center',
+    gap: 6,
+    paddingBottom: 5,
   },
 
   filterButton: {
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 22,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#F0D9E2',
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 7,
+    backgroundColor: '#F5E9EE',
   },
 
   filterButtonActive: {
     backgroundColor: PINK,
-    borderColor: PINK,
   },
 
   filterText: {
-    color: '#805C69',
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '600',
+    color: TEXT_MUTED,
   },
 
   filterTextActive: {
     color: '#FFFFFF',
+    fontWeight: '700',
+  },
+
+  progressHeader: {
+    marginTop: 2,
+    marginBottom: 4,
+  },
+
+  progressTitle: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: TEXT_MUTED,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+
+  progressFilterContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingBottom: 5,
+  },
+
+  progressFilterButton: {
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 7,
+    backgroundColor: '#F5E9EE',
+  },
+
+  progressFilterButtonActive: {
+    backgroundColor: DARK_PINK,
+  },
+
+  progressFilterText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: TEXT_MUTED,
+  },
+
+  progressFilterTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '700',
   },
 
   orderList: {
@@ -691,185 +888,140 @@ const styles = StyleSheet.create({
 
   orderListContent: {
     paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 30,
+    paddingTop: 7,
+    paddingBottom: 25,
   },
 
-  emptyCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 28,
-    alignItems: 'center',
-    marginTop: 12,
-  },
-
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#3F2630',
-    marginTop: 12,
-  },
-
-  emptyText: {
-    textAlign: 'center',
-    fontSize: 13,
-    color: '#8C6674',
-    marginTop: 6,
-    lineHeight: 19,
+  ordersGrid: {
+    width: '100%',
   },
 
   orderCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 17,
-    padding: 15,
-    marginBottom: 14,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
     borderWidth: 1,
-    borderColor: '#F3E3E9',
+    borderColor: '#F1E3E8',
   },
 
-  orderTop: {
+  cardHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 8,
-  },
-
-  orderTitleArea: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 10,
   },
 
-  orderIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    backgroundColor: '#FCE7F0',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  orderHeading: {
+  cardTitleContainer: {
     flex: 1,
   },
 
   orderTitle: {
-    color: '#3F2630',
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '800',
+    color: TEXT_DARK,
   },
 
   orderId: {
-    color: '#9B7784',
-    fontSize: 11,
+    fontSize: 10,
+    color: TEXT_MUTED,
     marginTop: 3,
   },
 
   statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 7,
     backgroundColor: '#FCE7F0',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 18,
     maxWidth: '48%',
   },
 
   statusText: {
-    color: DARK_PINK,
-    fontSize: 11,
+    fontSize: 9,
     fontWeight: '700',
+    color: DARK_PINK,
   },
 
-  dateRow: {
+  submittedDate: {
+    fontSize: 10,
+    color: TEXT_MUTED,
+    marginTop: 7,
+  },
+
+  productionProgressBox: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 7,
-    marginTop: 12,
+    backgroundColor: '#FFF6F9',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 7,
+    marginTop: 10,
   },
 
-  dateText: {
-    color: '#9B7784',
-    fontSize: 11,
+  progressCardLabel: {
+    fontSize: 10,
+    color: TEXT_MUTED,
+    fontWeight: '600',
+  },
+
+  progressCardValue: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: DARK_PINK,
+    backgroundColor: '#FCE7F0',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 5,
+    overflow: 'hidden',
   },
 
   divider: {
     height: 1,
-    backgroundColor: '#F2E5EA',
-    marginVertical: 14,
+    backgroundColor: '#F1E7EB',
+    marginVertical: 10,
   },
 
-  customerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 11,
-  },
-
-  customerIcon: {
-    width: 39,
-    height: 39,
-    borderRadius: 12,
-    backgroundColor: '#FFF0F5',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  customerDetails: {
-    flex: 1,
-  },
-
-  smallLabel: {
-    color: '#A1848E',
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 0.7,
+  infoLabel: {
+    fontSize: 10,
+    color: TEXT_MUTED,
+    marginBottom: 3,
   },
 
   customerName: {
-    color: '#3F2630',
-    fontSize: 14,
-    fontWeight: '700',
+    fontSize: 12,
+    fontWeight: '600',
+    color: TEXT_DARK,
+  },
+
+  contactText: {
+    fontSize: 10,
+    color: TEXT_MUTED,
     marginTop: 3,
   },
 
-  customerContact: {
-    color: '#8C6674',
-    fontSize: 11,
-    marginTop: 3,
-  },
-
-  infoGrid: {
+  detailsGrid: {
     flexDirection: 'row',
-    gap: 10,
-    marginTop: 16,
+    flexWrap: 'wrap',
+    gap: 14,
+    marginTop: 12,
   },
 
-  infoBox: {
+  detailItem: {
+    minWidth: '40%',
     flex: 1,
-    backgroundColor: '#FFFAFC',
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#F6E9EE',
-  },
-
-  infoValueRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-    marginTop: 8,
   },
 
   infoValue: {
-    color: '#3F2630',
-    fontSize: 17,
-    fontWeight: '800',
+    fontSize: 12,
+    fontWeight: '700',
+    color: TEXT_DARK,
   },
 
   totalValue: {
-    color: DARK_PINK,
-    fontSize: 16,
+    fontSize: 12,
     fontWeight: '800',
-    marginTop: 8,
+    color: DARK_PINK,
   },
 
   depositRow: {
@@ -877,35 +1029,32 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: 8,
-    marginTop: 14,
-    padding: 12,
-    backgroundColor: '#FFFAFC',
-    borderRadius: 12,
+    marginTop: 12,
+    padding: 10,
+    backgroundColor: '#FFF6F9',
+    borderRadius: 8,
   },
 
   depositLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 9,
     flex: 1,
   },
 
   depositTitle: {
     color: '#543541',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
   },
 
   depositAmount: {
-    color: '#8C6674',
-    fontSize: 11,
+    color: TEXT_MUTED,
+    fontSize: 10,
     marginTop: 3,
   },
 
   paymentBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 15,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 7,
   },
 
   paidBadge: {
@@ -917,7 +1066,7 @@ const styles = StyleSheet.create({
   },
 
   paymentBadgeText: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '700',
   },
 
@@ -931,20 +1080,53 @@ const styles = StyleSheet.create({
 
   manageOrderButton: {
     backgroundColor: DARK_PINK,
-    borderRadius: 11,
-    padding: 13,
-    marginTop: 14,
-    flexDirection: 'row',
-    justifyContent: 'center',
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginTop: 11,
     alignItems: 'center',
-    gap: 9,
+    justifyContent: 'center',
   },
 
   manageOrderButtonText: {
     color: '#FFFFFF',
-    fontSize: 13,
+    fontSize: 11,
     fontWeight: '800',
-    flex: 1,
+  },
+
+  emptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 55,
+    paddingHorizontal: 20,
+  },
+
+  emptyTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: TEXT_DARK,
     textAlign: 'center',
+  },
+
+  emptyText: {
+    fontSize: 11,
+    color: TEXT_MUTED,
+    textAlign: 'center',
+    marginTop: 6,
+    lineHeight: 17,
+  },
+
+  clearFiltersButton: {
+    backgroundColor: '#F7EAF0',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 8,
+    marginTop: 14,
+  },
+
+  clearFiltersText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: DARK_PINK,
   },
 });

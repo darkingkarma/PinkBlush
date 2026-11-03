@@ -1,4 +1,3 @@
-
 import { useState } from 'react';
 
 import {
@@ -10,11 +9,12 @@ import {
   Text,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
 
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import { RootStackParamList } from '../../navigator';
+import { RootStackParamList } from '../../../navigator';
 
 import { supabase } from '../../../supabase';
 
@@ -29,22 +29,33 @@ export default function ReviewOrderScreen({
 }: Props) {
   const { orderData, measurement } = route.params;
 
+  const { width } = useWindowDimensions();
+
   const [submitting, setSubmitting] = useState(false);
 
   const formatPrice = (value: number) => {
     return `₱${Number(value || 0).toFixed(2)}`;
   };
 
-  const totalAmount = Number(orderData.totalAmount || 0);
+  const totalAmount = Number(orderData?.totalAmount || 0);
 
-  const depositAmount = totalAmount * 0.5;
+  const depositAmount =
+    Math.round(totalAmount * 50) / 100;
 
-  const remainingBalance = totalAmount - depositAmount;
+  const remainingBalance =
+    totalAmount - depositAmount;
+
+  const isSmallScreen = width < 360;
 
   const handleSubmitOrder = async () => {
     if (submitting) return;
 
-    if (!orderData.items || orderData.items.length === 0) {
+    if (
+      !orderData ||
+      !orderData.garment?.id ||
+      !orderData.items ||
+      orderData.items.length === 0
+    ) {
       Alert.alert(
         'Invalid Order',
         'Please select at least one garment part.'
@@ -60,6 +71,44 @@ export default function ReviewOrderScreen({
       return;
     }
 
+    const requiredMeasurements = [
+      measurement.shoulder,
+      measurement.chest,
+      measurement.waist,
+      measurement.sleeve_length,
+      measurement.top_length,
+      measurement.hips,
+      measurement.inseam,
+      measurement.bottom_length,
+    ];
+
+    if (
+      requiredMeasurements.some(
+        value =>
+          value === null ||
+          value === undefined ||
+          !Number.isFinite(Number(value)) ||
+          Number(value) <= 0
+      )
+    ) {
+      Alert.alert(
+        'Incomplete Measurements',
+        'Please complete all your measurements before submitting your order.',
+        [
+          {
+            text: 'Edit Measurements',
+            onPress: editMeasurements,
+          },
+          {
+            text: 'Cancel',
+            style: 'cancel',
+          },
+        ]
+      );
+
+      return;
+    }
+
     if (
       !Number.isFinite(totalAmount) ||
       totalAmount <= 0
@@ -72,14 +121,16 @@ export default function ReviewOrderScreen({
     }
 
     const invalidItem = orderData.items.some(
-      (item) =>
+      (item: any) =>
         !item.partId ||
         !item.designId ||
         !item.fabricId ||
         !Number.isFinite(Number(item.quantity)) ||
         Number(item.quantity) <= 0 ||
         !Number.isFinite(Number(item.unitPrice)) ||
-        !Number.isFinite(Number(item.subtotal))
+        Number(item.unitPrice) < 0 ||
+        !Number.isFinite(Number(item.subtotal)) ||
+        Number(item.subtotal) < 0
     );
 
     if (invalidItem) {
@@ -90,9 +141,25 @@ export default function ReviewOrderScreen({
       return;
     }
 
+    const calculatedTotal = orderData.items.reduce(
+      (sum: number, item: any) =>
+        sum + Number(item.subtotal),
+      0
+    );
+
+    if (
+      Math.abs(calculatedTotal - totalAmount) > 0.01
+    ) {
+      Alert.alert(
+        'Price Mismatch',
+        'Your order total does not match the selected items. Please review your selections.'
+      );
+      return;
+    }
+
     Alert.alert(
       'Confirm Your Order',
-      'Please make sure your selected garment parts, designs, fabrics, quantities, and measurements are correct before confirming.\n\nDo you want to proceed with this order?',
+      'Please make sure your selected garment parts, designs, fabrics, quantities, and measurements are correct before confirming.\n\n50% deposit will be paid online. The remaining 50% will be paid in cash when you pick up your garment.\n\nDo you want to proceed?',
       [
         {
           text: 'Review Again',
@@ -127,7 +194,8 @@ export default function ReviewOrderScreen({
         return;
       }
 
-      // 1. Create the catalog order.
+      // 1. Create catalog order.
+      // Save a snapshot of the customer's measurements.
       const {
         data: order,
         error: orderError,
@@ -136,6 +204,16 @@ export default function ReviewOrderScreen({
         .insert({
           customer_id: user.id,
           measurement_id: measurement.id,
+          measurement_snapshot: {
+            shoulder: measurement.shoulder,
+            chest: measurement.chest,
+            waist: measurement.waist,
+            sleeve_length: measurement.sleeve_length,
+            top_length: measurement.top_length,
+            hips: measurement.hips,
+            inseam: measurement.inseam,
+            bottom_length: measurement.bottom_length,
+          },
           status: 'pending',
           total_amount: totalAmount,
         })
@@ -156,17 +234,19 @@ export default function ReviewOrderScreen({
         return;
       }
 
-      // 2. Save the selected garment parts and options.
-      const orderItems = orderData.items.map((item) => ({
-        order_id: order.id,
-        garment_id: orderData.garment.id,
-        garment_part_id: item.partId,
-        design_id: item.designId,
-        fabric_id: item.fabricId,
-        quantity: Number(item.quantity),
-        unit_price: Number(item.unitPrice),
-        subtotal: Number(item.subtotal),
-      }));
+      // 2. Save selected garment parts and options.
+      const orderItems = orderData.items.map(
+        (item: any) => ({
+          order_id: order.id,
+          garment_id: orderData.garment.id,
+          garment_part_id: item.partId,
+          design_id: item.designId,
+          fabric_id: item.fabricId,
+          quantity: Number(item.quantity),
+          unit_price: Number(item.unitPrice),
+          subtotal: Number(item.subtotal),
+        })
+      );
 
       const {
         error: itemsError,
@@ -180,7 +260,7 @@ export default function ReviewOrderScreen({
           itemsError
         );
 
-        // Remove the incomplete order if saving its items fails.
+        // Remove incomplete order if item insertion fails.
         const {
           error: rollbackError,
         } = await supabase
@@ -209,7 +289,7 @@ export default function ReviewOrderScreen({
         return;
       }
 
-      // 3. Proceed to the payment screen.
+      // 3. Proceed to online deposit payment.
       // Payment is not automatically marked as paid here.
       navigation.replace('Payment', {
         orderId: order.id,
@@ -232,6 +312,8 @@ export default function ReviewOrderScreen({
     }
   };
 
+  // Return to the measurement step if the customer
+  // wants to change their measurements.
   const editMeasurements = () => {
     navigation.navigate('OrderMeasurements', {
       orderData: orderData,
@@ -242,7 +324,12 @@ export default function ReviewOrderScreen({
     <View style={styles.container}>
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          {
+            paddingHorizontal: isSmallScreen ? 14 : 20,
+          },
+        ]}
       >
         {/* HEADER */}
         <View style={styles.header}>
@@ -271,9 +358,9 @@ export default function ReviewOrderScreen({
           Order Items
         </Text>
 
-        {orderData.items.map((item) => (
+        {orderData.items.map((item: any, index: number) => (
           <View
-            key={item.partId}
+            key={`${item.partId}-${index}`}
             style={styles.card}
           >
             <Text style={styles.partName}>
@@ -287,21 +374,9 @@ export default function ReviewOrderScreen({
               Selected Design
             </Text>
 
-            {item.designImage ? (
-              <Image
-                source={{
-                  uri: item.designImage,
-                }}
-                style={styles.designImage}
-                resizeMode="cover"
-              />
-            ) : (
-              <View style={styles.designPlaceholder}>
-                <Text style={styles.placeholderText}>
-                  No design image available
-                </Text>
-              </View>
-            )}
+            <DesignPreview
+              imageUrl={item.designImage}
+            />
 
             <Text style={styles.designName}>
               {item.designName || 'No design selected'}
@@ -377,27 +452,27 @@ export default function ReviewOrderScreen({
 
           <MeasurementRow
             title="Shoulder"
-            value={measurement.shoulder}
+            value={measurement?.shoulder}
           />
 
           <MeasurementRow
             title="Chest / Bust"
-            value={measurement.chest}
+            value={measurement?.chest}
           />
 
           <MeasurementRow
             title="Waist"
-            value={measurement.waist}
+            value={measurement?.waist}
           />
 
           <MeasurementRow
             title="Sleeve Length"
-            value={measurement.sleeve_length}
+            value={measurement?.sleeve_length}
           />
 
           <MeasurementRow
             title="Top Length"
-            value={measurement.top_length}
+            value={measurement?.top_length}
           />
 
           <View style={styles.measurementDivider} />
@@ -408,17 +483,17 @@ export default function ReviewOrderScreen({
 
           <MeasurementRow
             title="Hips"
-            value={measurement.hips}
+            value={measurement?.hips}
           />
 
           <MeasurementRow
             title="Inseam"
-            value={measurement.inseam}
+            value={measurement?.inseam}
           />
 
           <MeasurementRow
             title="Bottom Length"
-            value={measurement.bottom_length}
+            value={measurement?.bottom_length}
           />
         </View>
 
@@ -440,9 +515,15 @@ export default function ReviewOrderScreen({
           </Text>
 
           <View style={styles.paymentRow}>
-            <Text style={styles.paymentLabel}>
-              Required Deposit (50%)
-            </Text>
+            <View style={styles.paymentDescription}>
+              <Text style={styles.paymentLabel}>
+                Required Deposit (50%)
+              </Text>
+
+              <Text style={styles.paymentMethod}>
+                Online payment · GCash / PayPal
+              </Text>
+            </View>
 
             <Text style={styles.depositAmount}>
               {formatPrice(depositAmount)}
@@ -450,9 +531,15 @@ export default function ReviewOrderScreen({
           </View>
 
           <View style={styles.paymentRow}>
-            <Text style={styles.paymentLabel}>
-              Remaining Balance
-            </Text>
+            <View style={styles.paymentDescription}>
+              <Text style={styles.paymentLabel}>
+                Remaining Balance (50%)
+              </Text>
+
+              <Text style={styles.paymentMethod}>
+                Cash payment · At pickup
+              </Text>
+            </View>
 
             <Text style={styles.balanceAmount}>
               {formatPrice(remainingBalance)}
@@ -462,7 +549,7 @@ export default function ReviewOrderScreen({
           <View style={styles.depositDivider} />
 
           <Text style={styles.depositNote}>
-            A 50% deposit is required to proceed with your order. You will be taken to the payment screen after confirming.
+            Pay your 50% deposit online to proceed with your order. The remaining balance must be paid in cash when you pick up your finished garment.
           </Text>
         </View>
 
@@ -477,7 +564,13 @@ export default function ReviewOrderScreen({
           activeOpacity={0.85}
         >
           {submitting ? (
-            <ActivityIndicator color="#fff" />
+            <View style={styles.submitContent}>
+              <ActivityIndicator color="#fff" />
+
+              <Text style={styles.submitButtonText}>
+                SUBMITTING ORDER...
+              </Text>
+            </View>
           ) : (
             <Text style={styles.submitButtonText}>
               CONFIRM ORDER
@@ -493,10 +586,38 @@ export default function ReviewOrderScreen({
   );
 }
 
+// DESIGN IMAGE WITH FALLBACK
+function DesignPreview({
+  imageUrl,
+}: {
+  imageUrl?: string | null;
+}) {
+  const [imageError, setImageError] = useState(false);
+
+  if (!imageUrl || imageError) {
+    return (
+      <View style={styles.designPlaceholder}>
+        <Text style={styles.placeholderText}>
+          No design image available
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <Image
+      source={{ uri: imageUrl }}
+      style={styles.designImage}
+      resizeMode="contain"
+      onError={() => setImageError(true)}
+    />
+  );
+}
+
 // MEASUREMENT ROW
 type MeasurementRowProps = {
   title: string;
-  value: number | null;
+  value: number | string | null | undefined;
 };
 
 function MeasurementRow({
@@ -510,7 +631,7 @@ function MeasurementRow({
       </Text>
 
       <Text style={styles.measurementValue}>
-        {value === null || value === undefined
+        {value === null || value === undefined || value === ''
           ? '-'
           : `${value} cm`}
       </Text>
@@ -526,7 +647,7 @@ const styles = StyleSheet.create({
   },
 
   content: {
-    padding: 20,
+    paddingTop: 20,
     paddingBottom: 45,
   },
 
@@ -545,6 +666,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#888',
     marginTop: 6,
+    lineHeight: 20,
   },
 
   garmentHeader: {
@@ -622,6 +744,7 @@ const styles = StyleSheet.create({
   placeholderText: {
     color: '#999',
     fontSize: 13,
+    textAlign: 'center',
   },
 
   designName: {
@@ -651,6 +774,7 @@ const styles = StyleSheet.create({
   priceRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
     paddingVertical: 6,
   },
 
@@ -706,6 +830,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
     paddingVertical: 11,
     borderBottomWidth: 1,
     borderBottomColor: '#F5EDF0',
@@ -715,6 +841,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#555',
     fontWeight: '600',
+    flexShrink: 1,
   },
 
   measurementValue: {
@@ -734,8 +861,10 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 19,
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 8,
     marginTop: 3,
   },
 
@@ -771,18 +900,28 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginVertical: 7,
+    gap: 10,
+    marginVertical: 9,
+  },
+
+  paymentDescription: {
+    flex: 1,
   },
 
   paymentLabel: {
     fontSize: 13,
     color: '#777',
     fontWeight: '600',
-    flex: 1,
+  },
+
+  paymentMethod: {
+    fontSize: 11,
+    color: '#999',
+    marginTop: 4,
   },
 
   depositAmount: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '800',
     color: '#D96B8A',
   },
@@ -811,6 +950,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     borderRadius: 11,
     alignItems: 'center',
+    justifyContent: 'center',
     marginTop: 22,
   },
 
@@ -818,11 +958,18 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
 
+  submitContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+
   submitButtonText: {
     color: '#fff',
     fontSize: 15,
     fontWeight: '800',
     letterSpacing: 0.5,
+    textAlign: 'center',
   },
 
   bottomNote: {
@@ -830,5 +977,6 @@ const styles = StyleSheet.create({
     color: '#999',
     textAlign: 'center',
     marginTop: 13,
+    lineHeight: 18,
   },
 });

@@ -1,4 +1,3 @@
-
 import { useCallback, useEffect, useState } from 'react';
 
 import {
@@ -15,7 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import { supabase } from '../../../supabase';
-import type { RootStackParamList } from '../../navigator';
+import type { RootStackParamList } from '../../../navigator';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Receipt'>;
 
@@ -41,6 +40,10 @@ export default function ReceiptScreen({ route, navigation }: Props) {
 
   const [order, setOrder] = useState<OrderInfo | null>(null);
   const [payment, setPayment] = useState<PaymentInfo | null>(null);
+
+  const [onlineDepositPaid, setOnlineDepositPaid] = useState(0);
+  const [cashBalancePaid, setCashBalancePaid] = useState(0);
+
   const [loading, setLoading] = useState(true);
 
   const formatPrice = (amount: number) =>
@@ -51,6 +54,9 @@ export default function ReceiptScreen({ route, navigation }: Props) {
 
   const loadReceipt = useCallback(async () => {
     setLoading(true);
+
+    setOnlineDepositPaid(0);
+    setCashBalancePaid(0);
 
     try {
       const {
@@ -64,6 +70,11 @@ export default function ReceiptScreen({ route, navigation }: Props) {
 
       let orderData: OrderInfo | null = null;
       let paymentData: PaymentInfo | null = null;
+      let payments: PaymentInfo[] = [];
+
+      // =========================================
+      // CATALOG ORDER
+      // =========================================
 
       if (orderType === 'catalog') {
         const { data, error } = await supabase
@@ -86,24 +97,36 @@ export default function ReceiptScreen({ route, navigation }: Props) {
           created_at: data.created_at,
         };
 
-        const { data: payment, error: paymentError } = await supabase
-          .from('payments')
-          .select(
-            'id, payment_type, payment_method, amount, status, transaction_id, paid_at'
-          )
-          .eq('id', paymentId)
-          .eq('order_id', orderId)
-          .single();
+        const { data: paymentRecords, error: paymentError } =
+          await supabase
+            .from('payments')
+            .select(
+              'id, payment_type, payment_method, amount, status, transaction_id, paid_at'
+            )
+            .eq('order_id', orderId);
 
-        if (paymentError || !payment) {
-          throw new Error('Catalog payment record could not be found.');
+        if (paymentError || !paymentRecords) {
+          throw new Error('Catalog payment records could not be found.');
         }
 
-        paymentData = {
-          ...payment,
-          amount: Number(payment.amount),
-        };
-      } else {
+        payments = paymentRecords.map((item) => ({
+          ...item,
+          amount: Number(item.amount),
+        }));
+
+        paymentData =
+          payments.find((item) => item.id === paymentId) ?? null;
+
+        if (!paymentData) {
+          throw new Error('Catalog payment record could not be found.');
+        }
+      }
+
+      // =========================================
+      // CUSTOM ORDER
+      // =========================================
+
+      else {
         const { data, error } = await supabase
           .from('custom_orders')
           .select('id, status, quoted_price, created_at')
@@ -124,27 +147,57 @@ export default function ReceiptScreen({ route, navigation }: Props) {
           created_at: data.created_at,
         };
 
-        const { data: payment, error: paymentError } = await supabase
-          .from('payments')
-          .select(
-            'id, payment_type, payment_method, amount, status, transaction_id, paid_at'
-          )
-          .eq('id', paymentId)
-          .eq('custom_order_id', orderId)
-          .single();
+        const { data: paymentRecords, error: paymentError } =
+          await supabase
+            .from('payments')
+            .select(
+              'id, payment_type, payment_method, amount, status, transaction_id, paid_at'
+            )
+            .eq('custom_order_id', orderId);
 
-        if (paymentError || !payment) {
-          throw new Error('Custom order payment record could not be found.');
+        if (paymentError || !paymentRecords) {
+          throw new Error('Custom order payment records could not be found.');
         }
 
-        paymentData = {
-          ...payment,
-          amount: Number(payment.amount),
-        };
+        payments = paymentRecords.map((item) => ({
+          ...item,
+          amount: Number(item.amount),
+        }));
+
+        paymentData =
+          payments.find((item) => item.id === paymentId) ?? null;
+
+        if (!paymentData) {
+          throw new Error('Custom order payment record could not be found.');
+        }
       }
+
+      // =========================================
+      // CALCULATE ALL PAYMENTS
+      // =========================================
+
+      const depositPaid = payments
+        .filter(
+          (item) =>
+            item.payment_type === 'deposit' &&
+            item.status === 'paid' &&
+            ['gcash', 'paypal'].includes(item.payment_method)
+        )
+        .reduce((sum, item) => sum + item.amount, 0);
+
+      const cashPaid = payments
+        .filter(
+          (item) =>
+            item.payment_type === 'balance' &&
+            item.payment_method === 'cash' &&
+            item.status === 'paid'
+        )
+        .reduce((sum, item) => sum + item.amount, 0);
 
       setOrder(orderData);
       setPayment(paymentData);
+      setOnlineDepositPaid(depositPaid);
+      setCashBalancePaid(cashPaid);
     } catch (error) {
       const message =
         error instanceof Error
@@ -166,16 +219,25 @@ export default function ReceiptScreen({ route, navigation }: Props) {
     void loadReceipt();
   }, [loadReceipt]);
 
+  // =========================================
+  // LOADING
+  // =========================================
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#B84470" />
+
         <Text style={styles.loadingText}>
           Loading your receipt...
         </Text>
       </View>
     );
   }
+
+  // =========================================
+  // EMPTY RECEIPT
+  // =========================================
 
   if (!order || !payment) {
     return (
@@ -198,22 +260,36 @@ export default function ReceiptScreen({ route, navigation }: Props) {
     );
   }
 
+  // =========================================
+  // PAYMENT CALCULATIONS
+  // =========================================
+
   const total = Number(order.total_amount);
-  const amountPaid = payment.status === 'paid' ? Number(payment.amount) : 0;
-  const remaining = Math.max(0, total - amountPaid);
+
+  const totalPaid = onlineDepositPaid + cashBalancePaid;
+
+  const remaining = Math.max(0, total - totalPaid);
 
   const isPaid = payment.status === 'paid';
+
+  const isFullyPaid = remaining <= 0.01;
 
   const methodName =
     payment.payment_method === 'gcash'
       ? 'GCash'
       : payment.payment_method === 'paypal'
         ? 'PayPal'
-        : payment.payment_method;
+        : payment.payment_method === 'cash'
+          ? 'Cash'
+          : payment.payment_method;
 
   const paymentType =
     payment.payment_type.charAt(0).toUpperCase() +
     payment.payment_type.slice(1);
+
+  // =========================================
+  // RECEIPT UI
+  // =========================================
 
   return (
     <ScrollView
@@ -374,11 +450,31 @@ export default function ReceiptScreen({ route, navigation }: Props) {
 
         <View style={styles.detailRow}>
           <Text style={styles.detailLabel}>
-            Amount Paid
+            Online Deposit Paid
           </Text>
 
           <Text style={styles.depositValue}>
-            {formatPrice(amountPaid)}
+            {formatPrice(onlineDepositPaid)}
+          </Text>
+        </View>
+
+        <View style={styles.detailRow}>
+          <Text style={styles.detailLabel}>
+            Cash Balance Paid
+          </Text>
+
+          <Text style={styles.detailValue}>
+            {formatPrice(cashBalancePaid)}
+          </Text>
+        </View>
+
+        <View style={styles.detailRow}>
+          <Text style={styles.detailLabel}>
+            Total Amount Paid
+          </Text>
+
+          <Text style={styles.depositValue}>
+            {formatPrice(totalPaid)}
           </Text>
         </View>
 
@@ -387,12 +483,17 @@ export default function ReceiptScreen({ route, navigation }: Props) {
             Remaining Balance
           </Text>
 
-          <Text style={styles.detailValue}>
+          <Text
+            style={[
+              styles.detailValue,
+              { color: isFullyPaid ? '#27865A' : '#B84470' },
+            ]}
+          >
             {formatPrice(remaining)}
           </Text>
         </View>
 
-        {/* BALANCE */}
+        {/* BALANCE INFORMATION */}
 
         <View style={styles.balanceBox}>
           <Ionicons
@@ -403,15 +504,22 @@ export default function ReceiptScreen({ route, navigation }: Props) {
 
           <View style={styles.balanceInfo}>
             <Text style={styles.balanceTitle}>
-              Remaining Balance
+              {isFullyPaid ? 'Order Fully Paid' : 'Remaining Balance'}
             </Text>
 
-            <Text style={styles.balanceAmount}>
+            <Text
+              style={[
+                styles.balanceAmount,
+                isFullyPaid && { color: '#27865A' },
+              ]}
+            >
               {formatPrice(remaining)}
             </Text>
 
             <Text style={styles.balanceNote}>
-              Payable according to your order's payment arrangement.
+              {isFullyPaid
+                ? 'Your order has been fully paid. Thank you!'
+                : 'Pay the remaining balance in cash when picking up your order.'}
             </Text>
           </View>
         </View>
@@ -424,6 +532,27 @@ export default function ReceiptScreen({ route, navigation }: Props) {
           <Text style={styles.footerText}>
             Thank you for choosing Pink Blush!
           </Text>
+        </View>
+
+        {/* SCREENSHOT INSTRUCTIONS */}
+
+        <View style={styles.screenshotBox}>
+          <Ionicons
+            name="phone-portrait-outline"
+            size={22}
+            color="#B84470"
+          />
+
+          <View style={styles.screenshotInfo}>
+            <Text style={styles.screenshotTitle}>
+              Save Your Receipt
+            </Text>
+
+            <Text style={styles.screenshotText}>
+              Take a screenshot of this receipt to keep a copy
+              in your phone's gallery for future reference.
+            </Text>
+          </View>
         </View>
       </View>
 
@@ -709,6 +838,33 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#816875',
     fontWeight: '600',
+  },
+
+  screenshotBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#FFF0F5',
+    borderRadius: 12,
+    padding: 14,
+    gap: 12,
+    marginTop: 20,
+  },
+
+  screenshotInfo: {
+    flex: 1,
+  },
+
+  screenshotTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#B84470',
+    marginBottom: 5,
+  },
+
+  screenshotText: {
+    fontSize: 11,
+    lineHeight: 17,
+    color: '#816875',
   },
 
   primaryButton: {

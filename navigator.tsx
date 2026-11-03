@@ -5,7 +5,6 @@ import {
   ActivityIndicator,
   View,
   Text,
-  Alert,
   StyleSheet,
   TouchableOpacity,
 } from 'react-native';
@@ -24,57 +23,61 @@ import {
 import {
   createBottomTabNavigator,
 } from '@react-navigation/bottom-tabs';
+import NotificationsScreen from './shared/notification';
+import WelcomeScreen from './screens/customer/welcome';
+import LoginScreen from './screens/customer/login';
+import RegisterScreen from './screens/customer/register';
+import HomeScreen from './screens/customer/home';
 
-import WelcomeScreen from './customer/welcome';
-import LoginScreen from './customer/login';
-import RegisterScreen from './customer/register';
-import HomeScreen from './customer/home';
+import ProfileScreen from './screens/customer/customer-profile/profile';
+import MeasurementsScreen from './screens/customer/customer-profile/measurements';
+import EditMeasurementsScreen from './screens/customer/customer-profile/edit-measurements';
+import PersonalDetailsScreen from './screens/customer/customer-profile/personal-details';
 
-import ProfileScreen from './customer/customer-profile/profile';
-import MeasurementsScreen from './customer/customer-profile/measurements';
-import EditMeasurementsScreen from './customer/customer-profile/edit-measurements';
+import OrderMeasurementsScreen from './screens/customer/order/order-measurements';
+import ChangePasswordScreen from './screens/customer/customer-profile/changepass';
+import ReviewOrderScreen from './screens/customer/order/review-order';
+import OrderTypeScreen from './screens/customer/order/order-type';
+import CustomerCategoriesScreen from './screens/customer/order/categories';
+import CustomerGarmentsScreen from './screens/customer/order/garments';
+import CustomerGarmentDetailsScreen from './screens/customer/order/garment-details';
+import ConfigurePartsScreen from './screens/customer/order/configure-parts';
+import MyOrdersScreen from './screens/customer/order/my-orders';
+import OrderDetailsScreen from './screens/customer/order/order-details';
+import ReviewQuotationScreen from './screens/customer/order/review-quotation';
+import CustomOrderScreen from './screens/customer/order/custom-order';
+import CatalogScreen from './screens/customer/order/catalog';
+import PaymentScreen from './screens/customer/order/payment';
+import ReceiptScreen from './screens/customer/order/receipt';
 
-import OrderMeasurementsScreen from './customer/order/order-measurements';
-import ReviewOrderScreen from './customer/order/review-order';
-import OrderTypeScreen from './customer/order/order-type';
-import CustomerCategoriesScreen from './customer/order/categories';
-import CustomerGarmentsScreen from './customer/order/garments';
-import CustomerGarmentDetailsScreen from './customer/order/garment-details';
-import ConfigurePartsScreen from './customer/order/configure-parts';
-import MyOrdersScreen from './customer/order/my-orders';
-import OrderDetailsScreen from './customer/order/order-details';
-import ReviewQuotationScreen from './customer/order/review-quotation';
-import CustomOrderScreen from './customer/order/custom-order';
-import CatalogScreen from './customer/order/catalog';
-import PaymentScreen from './customer/order/payment';
-import ReceiptScreen from './customer/order/receipt';
+import ReviewCustomOrderScreen from './screens/customer/order/review-custom-order';
+import StaffProfileScreen from './screens/staff/profile';
+import GarmentCategoriesScreen from './screens/staff/product/garment-categories';
+import ManageGarmentsScreen from './screens/staff/product/manage-garments';
 
-// Import this screen after creating the file.
-// import ReviewCustomOrderScreen from './customer/order/review-custom-order';
+import AddGarmentPartScreen from './screens/staff/product/add-garment-part';
+import EditGarmentPartScreen from './screens/staff/product/edit-garment-part';
 
-import GarmentCategoriesScreen from './staff/product/garment-categories';
-import ManageGarmentsScreen from './staff/product/manage-garments';
+import AddDesignScreen from './screens/staff/product/add-design';
+import EditDesignScreen from './screens/staff/product/edit-design';
 
-import AddGarmentPartScreen from './staff/product/add-garment-part';
-import EditGarmentPartScreen from './staff/product/edit-garment-part';
+import FabricsScreen from './screens/staff/product/fabrics';
+import ReportsManagementScreen from './screens/staff/reports/reports';
+import GarmentDetailsScreen from './screens/staff/product/garment-details';
 
-import AddDesignScreen from './staff/product/add-design';
-import EditDesignScreen from './staff/product/edit-design';
+import ManageOrdersScreen from './screens/staff/orders/manage-orders';
+import ReviewRequestScreen from './screens/staff/orders/review-request';
+import CatalogOrdersScreen from './screens/staff/orders/catalog-orders';
 
-import FabricsScreen from './staff/product/fabrics';
+import ManageTailorsScreen from './screens/staff/tailors/manage-tailors';
+import StaffDashboardScreen from './screens/staff/dashboard';
 
-import GarmentDetailsScreen from './staff/product/garment-details';
+import ManageOrderScreen from './screens/staff/orders/manage-order';
+import ManagePaymentsScreen from './screens/staff/payments/manage-payments';
 
-import ManageOrdersScreen from './staff/orders/manage-orders';
-import ReviewRequestScreen from './staff/orders/review-request';
-import CatalogOrdersScreen from './staff/orders/catalog-orders';
 
-import ManageTailorsScreen from './staff/tailors/manage-tailors';
-import TailorAssignmentsScreen from './staff/tailors/manage-tailor-assignments';
-import ProductionTrackingScreen from './staff/orders/production-tracking';
 
-import ManageOrderScreen from './staff/orders/manage-order';
-import { supabase } from '../supabase';
+import { supabase } from './supabase';
 
 // =====================================================
 // CUSTOM ORDER DRAFT TYPE
@@ -100,6 +103,7 @@ export type RootStackParamList = {
 
   Main: undefined;
   StaffDashboard: undefined;
+  Notifications: undefined;
   ManageTailors: undefined;
   MyOrders: undefined;
 
@@ -120,7 +124,7 @@ export type RootStackParamList = {
     categoryId: string;
     categoryName: string;
   };
-
+ReportsManagement: undefined;
   CustomerGarmentDetails: {
     garment: {
       id: string;
@@ -159,7 +163,7 @@ export type RootStackParamList = {
       }
     >;
   };
-
+  ChangePassword: undefined;
   OrderMeasurements: {
     orderData?: {
       garment: {
@@ -244,7 +248,7 @@ export type RootStackParamList = {
 
   Measurements: undefined;
   EditMeasurements: undefined;
-
+  PersonalDetails: undefined;
   ManageGarments: undefined;
   GarmentCategories: undefined;
 
@@ -279,7 +283,7 @@ export type RootStackParamList = {
       image_url: string | null;
     };
   };
-
+  
   Fabrics: undefined;
 
   GarmentDetails: {
@@ -337,9 +341,11 @@ export type MainTabParamList = {
   Profile: undefined;
 };
 
+
 export type StaffTabParamList = {
   Dashboard: undefined;
   ManageOrders: undefined;
+  Payments: undefined;
   Tailors: undefined;
   Garments: undefined;
   Profile: undefined;
@@ -519,33 +525,6 @@ function MainTabs() {
   );
 }
 
-// =====================================================
-// STAFF DASHBOARD TAB
-// =====================================================
-
-function StaffDashboardTab() {
-  return (
-    <View style={staffStyles.container}>
-      <Ionicons
-        name="grid-outline"
-        size={55}
-        color="#d96b8a"
-      />
-
-      <Text style={staffStyles.title}>
-        Staff Dashboard
-      </Text>
-
-      <Text style={staffStyles.subtitle}>
-        Welcome to Pink Blush Staff Management
-      </Text>
-
-      <Text style={staffStyles.description}>
-        Use the tabs below to manage orders, tailors, and garments.
-      </Text>
-    </View>
-  );
-}
 
 // =====================================================
 // STAFF MANAGE ORDERS TAB
@@ -555,75 +534,34 @@ function StaffManageOrdersTab() {
   const [selectedOrderType, setSelectedOrderType] =
     useState<'catalog' | 'custom'>('catalog');
 
-  const menuButtonStyle = (selected: boolean) => ({
-    flex: 1,
-    minHeight: 65,
-    paddingVertical: 8,
-    paddingHorizontal: 6,
-    alignItems: 'center' as const,
-    justifyContent: 'center' as const,
-    borderRadius: 12,
-    backgroundColor: selected ? '#D96B8A' : '#FFFFFF',
-    borderWidth: 1,
-    borderColor: selected ? '#D96B8A' : '#F0D9E2',
-  });
-
-  const menuTextStyle = (selected: boolean) => ({
-    marginTop: 5,
-    fontWeight: '700' as const,
-    fontSize: 12,
-    textAlign: 'center' as const,
-    color: selected ? '#FFFFFF' : '#B84470',
-  });
-
   return (
-    <View style={{ flex: 1, backgroundColor: '#FFF8FA' }}>
-      <View
-        style={{
-          paddingHorizontal: 14,
-          paddingTop: 12,
-          paddingBottom: 12,
-          backgroundColor: '#FFFFFF',
-        }}
-      >
-        <Text
-          style={{
-            fontSize: 21,
-            fontWeight: '800',
-            color: '#3F2630',
-          }}
-        >
+    <View style={staffStyles.manageOrdersContainer}>
+      <View style={staffStyles.manageOrdersHeader}>
+        <Text style={staffStyles.manageOrdersTitle}>
           Manage Orders
         </Text>
 
-        <Text
-          style={{
-            fontSize: 11,
-            color: '#8C6674',
-            marginTop: 3,
-            marginBottom: 12,
-          }}
-        >
-          View orders, assign tailors, and manage production.
+        <Text style={staffStyles.manageOrdersSubtitle}>
+          View and manage customer orders.
         </Text>
 
-        <View style={{ flexDirection: 'row', gap: 10 }}>
+        <View style={staffStyles.orderTypeTabs}>
           <TouchableOpacity
             activeOpacity={0.8}
             onPress={() => setSelectedOrderType('catalog')}
-            style={menuButtonStyle(selectedOrderType === 'catalog')}
+            style={[
+              staffStyles.orderTypeTab,
+              selectedOrderType === 'catalog' &&
+                staffStyles.orderTypeTabActive,
+            ]}
           >
-            <Ionicons
-              name="shirt-outline"
-              size={23}
-              color={
-                selectedOrderType === 'catalog'
-                  ? '#FFFFFF'
-                  : '#D96B8A'
-              }
-            />
-
-            <Text style={menuTextStyle(selectedOrderType === 'catalog')}>
+            <Text
+              style={[
+                staffStyles.orderTypeText,
+                selectedOrderType === 'catalog' &&
+                  staffStyles.orderTypeTextActive,
+              ]}
+            >
               Catalog Orders
             </Text>
           </TouchableOpacity>
@@ -631,26 +569,26 @@ function StaffManageOrdersTab() {
           <TouchableOpacity
             activeOpacity={0.8}
             onPress={() => setSelectedOrderType('custom')}
-            style={menuButtonStyle(selectedOrderType === 'custom')}
+            style={[
+              staffStyles.orderTypeTab,
+              selectedOrderType === 'custom' &&
+                staffStyles.orderTypeTabActive,
+            ]}
           >
-            <Ionicons
-              name="cut-outline"
-              size={23}
-              color={
-                selectedOrderType === 'custom'
-                  ? '#FFFFFF'
-                  : '#D96B8A'
-              }
-            />
-
-            <Text style={menuTextStyle(selectedOrderType === 'custom')}>
+            <Text
+              style={[
+                staffStyles.orderTypeText,
+                selectedOrderType === 'custom' &&
+                  staffStyles.orderTypeTextActive,
+              ]}
+            >
               Custom Orders
             </Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      <View style={{ flex: 1 }}>
+      <View style={staffStyles.manageOrdersContent}>
         {selectedOrderType === 'catalog' ? (
           <CatalogOrdersScreen />
         ) : (
@@ -662,108 +600,18 @@ function StaffManageOrdersTab() {
 }
 
 // =====================================================
-// STAFF PROFILE TAB
-// =====================================================
-
-function StaffProfileTab() {
-  const handleLogout = async () => {
-    Alert.alert(
-      'Logout',
-      'Are you sure you want to log out?',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'Logout',
-          style: 'destructive',
-          onPress: async () => {
-            const { error } = await supabase.auth.signOut();
-
-            if (error) {
-              Alert.alert('Logout Failed', error.message);
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  return (
-    <View style={staffStyles.container}>
-      <Ionicons
-        name="person-circle-outline"
-        size={70}
-        color="#d96b8a"
-      />
-
-      <Text style={staffStyles.title}>
-        Staff Profile
-      </Text>
-
-      <Text style={staffStyles.subtitle}>
-        Pink Blush Staff Account
-      </Text>
-
-      <TouchableOpacity
-        style={staffStyles.logoutButton}
-        onPress={handleLogout}
-      >
-        <Text style={staffStyles.logoutButtonText}>
-          Logout
-        </Text>
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-// =====================================================
 // STAFF BOTTOM TABS
 // =====================================================
 
 function StaffTabs() {
   return (
     <StaffTab.Navigator
-      initialRouteName="Dashboard"
-      screenOptions={{
-        headerShown: true,
-
-        tabBarActiveTintColor: '#d96b8a',
-        tabBarInactiveTintColor: '#999',
-
-        tabBarStyle: {
-          backgroundColor: '#fff',
-          borderTopColor: '#f1d9e0',
-          height: 65,
-          paddingBottom: 8,
-          paddingTop: 6,
-        },
-
-        tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: '600',
-        },
-
-        headerTitleAlign: 'center',
-
-        headerStyle: {
-          backgroundColor: '#fff',
-        },
-
-        headerTintColor: '#d96b8a',
-
-        headerTitleStyle: {
-          fontSize: 18,
-          fontWeight: '700',
-        },
-      }}
     >
       <StaffTab.Screen
         name="Dashboard"
-        component={StaffDashboardTab}
+        component={StaffDashboardScreen}
         options={{
-          headerTitle: 'Staff Dashboard',
+          headerShown: false,
           tabBarLabel: 'Dashboard',
 
           tabBarIcon: ({ color, size, focused }) => (
@@ -786,6 +634,23 @@ function StaffTabs() {
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons
               name={focused ? 'receipt' : 'receipt-outline'}
+              size={size}
+              color={color}
+            />
+          ),
+        }}
+      />
+
+      <StaffTab.Screen
+        name="Payments"
+        component={ManagePaymentsScreen}
+        options={{
+          headerTitle: 'Manage Payments',
+          tabBarLabel: 'Payments',
+
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons
+              name={focused ? 'wallet' : 'wallet-outline'}
               size={size}
               color={color}
             />
@@ -850,9 +715,9 @@ function StaffTabs() {
 
       <StaffTab.Screen
         name="Profile"
-        component={StaffProfileTab}
+        component={StaffProfileScreen}
         options={{
-          headerTitle: 'Staff Profile',
+          headerTitle: 'My Profile',
           tabBarLabel: 'Profile',
 
           tabBarIcon: ({ color, size, focused }) => (
@@ -877,47 +742,114 @@ const staffStyles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#faf9f8',
-    padding: 25,
+    backgroundColor: '#FFF8FA',
+    padding: 24,
   },
 
   title: {
-    fontSize: 25,
-    fontWeight: 'bold',
-    color: '#1e2a4a',
-    marginTop: 16,
-    marginBottom: 10,
+    fontSize: 23,
+    fontWeight: '800',
+    color: '#3F2630',
+    textAlign: 'center',
+    marginBottom: 8,
   },
 
   subtitle: {
-    fontSize: 15,
-    color: '#555',
+    fontSize: 14,
+    color: '#8C6674',
     textAlign: 'center',
     marginBottom: 12,
   },
 
   description: {
     fontSize: 13,
-    color: '#777',
+    color: '#8C6674',
     textAlign: 'center',
     lineHeight: 20,
+    maxWidth: 320,
   },
 
   logoutButton: {
     width: '100%',
-    backgroundColor: '#fff',
+    maxWidth: 320,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#d96b8a',
-    borderRadius: 12,
-    padding: 16,
+    borderColor: '#D96B8A',
+    borderRadius: 9,
+    paddingVertical: 13,
     alignItems: 'center',
-    marginTop: 15,
+    marginTop: 18,
   },
 
   logoutButtonText: {
-    color: '#d96b8a',
-    fontSize: 16,
-    fontWeight: 'bold',
+    color: '#B84470',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+
+  // MANAGE ORDERS
+
+  manageOrdersContainer: {
+    flex: 1,
+    backgroundColor: '#FFF8FA',
+  },
+
+  manageOrdersHeader: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    paddingTop: 8,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F2E5EA',
+  },
+
+  manageOrdersTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#3F2630',
+  },
+
+  manageOrdersSubtitle: {
+    fontSize: 10,
+    color: '#8C6674',
+    marginTop: 2,
+    marginBottom: 8,
+  },
+
+  orderTypeTabs: {
+    flexDirection: 'row',
+    backgroundColor: '#F9EFF3',
+    borderRadius: 8,
+    padding: 3,
+    gap: 3,
+  },
+
+  orderTypeTab: {
+    flex: 1,
+    paddingVertical: 7,
+    paddingHorizontal: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 6,
+  },
+
+  orderTypeTabActive: {
+    backgroundColor: '#D96B8A',
+  },
+
+  orderTypeText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#936D7B',
+  },
+
+  orderTypeTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+  },
+
+  manageOrdersContent: {
+    flex: 1,
   },
 });
 
@@ -1229,10 +1161,18 @@ export default function AppNavigator() {
           name="Measurements"
           component={MeasurementsScreen}
         />
-
+        <Stack.Screen
+          name="ChangePassword"
+          component={ChangePasswordScreen}
+        />
         <Stack.Screen
           name="EditMeasurements"
           component={EditMeasurementsScreen}
+        />
+        <Stack.Screen
+          name="PersonalDetails"
+          component={PersonalDetailsScreen}
+          options={{ headerShown: false }}
         />
 
         <Stack.Screen
@@ -1245,13 +1185,10 @@ export default function AppNavigator() {
           component={ReviewOrderScreen}
         />
 
-        {/* Add this registration when ReviewCustomOrderScreen exists. */}
-        {/*
         <Stack.Screen
           name="ReviewCustomOrder"
           component={ReviewCustomOrderScreen}
         />
-        */}
 
         <Stack.Screen
           name="Payment"
@@ -1330,6 +1267,18 @@ export default function AppNavigator() {
         <Stack.Screen
           name="GarmentDetails"
           component={GarmentDetailsScreen}
+        />
+        <Stack.Screen
+          name="ReportsManagement"
+          component={ReportsManagementScreen}
+          options={{
+            title: 'Reports Management',
+          }}
+        />
+
+        <Stack.Screen
+          name="Notifications"
+          component={NotificationsScreen}
         />
       </Stack.Navigator>
     </NavigationContainer>

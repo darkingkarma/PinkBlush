@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from 'react';
 
 import {
@@ -17,7 +18,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import { RootStackParamList } from '../../navigator';
+import { RootStackParamList } from '../../../navigator';
 import { supabase } from '../../../supabase';
 
 type Props = NativeStackScreenProps<
@@ -40,6 +41,9 @@ export default function ReviewRequestScreen({
 
   const [customer, setCustomer] =
     useState<CustomerProfile | null>(null);
+
+  const [reviewStatus, setReviewStatus] =
+    useState(order.status);
 
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageLoading, setImageLoading] = useState(false);
@@ -74,21 +78,33 @@ export default function ReviewRequestScreen({
   const [declineReason, setDeclineReason] = useState('');
   const [saving, setSaving] = useState(false);
   const [declining, setDeclining] = useState(false);
+  const [reviewUpdating, setReviewUpdating] = useState(false);
 
-  const isLocked = [
+  const editableStatuses = [
+    'under_review',
+    'quotation_sent',
+  ];
+
+  const lockedStatuses = [
     'accepted',
     'declined',
     'completed',
-  ].includes(order.status);
-
-  const isBusy = saving || declining;
-
-  const editableStatuses = [
-    'submitted',
-    'under_review',
-    'quoted',
-    'quotation_sent',
+    'cancelled',
+    'deposit_paid',
+    'in_production',
+    'for_fitting',
+    'for_revision',
+    'ready_for_pickup',
   ];
+
+  const canManageQuotation =
+    editableStatuses.includes(reviewStatus);
+
+  const isLocked =
+    lockedStatuses.includes(reviewStatus);
+
+  const isBusy =
+    saving || declining || reviewUpdating;
 
   const formatStatus = (status: string) =>
     status
@@ -117,23 +133,91 @@ export default function ReviewRequestScreen({
   };
 
   // DateTimePicker v9.1.0 API
-    const handleDateValueChange = (
-        event: any,
-        selectedDate?: Date
-    ) => {
-        if (selectedDate) {
-            setEstimatedCompletionDate(selectedDate);
-        }
+  // Kept unchanged from your original implementation.
+  const handleDateValueChange = (
+    event: any,
+    selectedDate?: Date
+  ) => {
+    if (selectedDate) {
+      setEstimatedCompletionDate(selectedDate);
+    }
 
-        if (Platform.OS === 'android') {
-            setShowDatePicker(false);
-        }
-    };
+    if (Platform.OS === 'android') {
+      setShowDatePicker(false);
+    }
+  };
 
   const handleDateDismiss = () => {
     setShowDatePicker(false);
   };
 
+  // Automatically mark newly opened requests as under review.
+  useEffect(() => {
+    let mounted = true;
+
+    const markAsUnderReview = async () => {
+      if (order.status !== 'submitted') return;
+
+      setReviewUpdating(true);
+
+      try {
+        const { data, error } = await supabase
+          .from('custom_orders')
+          .update({
+            status: 'under_review',
+          })
+          .eq('id', order.id)
+          .eq('status', 'submitted')
+          .select('id');
+
+        if (error) throw error;
+
+        if (!mounted) return;
+
+        if (data && data.length > 0) {
+          setReviewStatus('under_review');
+        } else {
+          // The request may have been updated elsewhere.
+          const { data: latestOrder, error: latestError } =
+            await supabase
+              .from('custom_orders')
+              .select('status')
+              .eq('id', order.id)
+              .maybeSingle();
+
+          if (latestError) throw latestError;
+
+          if (mounted && latestOrder?.status) {
+            setReviewStatus(latestOrder.status);
+          }
+        }
+      } catch (error: any) {
+        console.warn(
+          'Could not update request status:',
+          error?.message
+        );
+
+        if (mounted) {
+          Alert.alert(
+            'Status Not Updated',
+            'The request could not automatically be marked as under review. Please refresh Manage Orders and try again.'
+          );
+        }
+      } finally {
+        if (mounted) {
+          setReviewUpdating(false);
+        }
+      }
+    };
+
+    void markAsUnderReview();
+
+    return () => {
+      mounted = false;
+    };
+  }, [order.id, order.status]);
+
+  // Load customer details and reference image.
   useEffect(() => {
     let mounted = true;
 
@@ -203,8 +287,19 @@ export default function ReviewRequestScreen({
     };
   }, [order.user_id, order.reference_image_url]);
 
+  // Check if the estimated date is later than the customer's needed-by date.
+  const neededByDate = order.needed_by_date
+    ? new Date(`${order.needed_by_date}T12:00:00`)
+    : null;
+
+  const dateIsLate =
+    !!estimatedCompletionDate &&
+    !!order.needed_by_date &&
+    toDatabaseDate(estimatedCompletionDate) >
+        order.needed_by_date;
+
   const sendQuotation = async () => {
-    if (isLocked || isBusy) return;
+    if (!canManageQuotation || isBusy) return;
 
     if (!estimatedCompletionDate) {
       Alert.alert(
@@ -223,11 +318,11 @@ export default function ReviewRequestScreen({
       !Number.isFinite(price) ||
       !Number.isFinite(deposit) ||
       price <= 0 ||
-      deposit < 0
+      deposit <= 0
     ) {
       Alert.alert(
         'Invalid Amount',
-        'Enter a valid total price and deposit amount.'
+        'Enter a valid total price and a deposit greater than ₱0.'
       );
       return;
     }
@@ -262,14 +357,16 @@ export default function ReviewRequestScreen({
       if (!data || data.length === 0) {
         Alert.alert(
           'Quotation Not Saved',
-          'The order status may have changed. Return to Manage Orders and refresh.'
+          'The request status may have changed. Return to Manage Orders and refresh.'
         );
         return;
       }
 
+      setReviewStatus('quotation_sent');
+
       Alert.alert(
         'Quotation Sent',
-        'The quotation and estimated completion date have been saved. The customer can review the quotation in My Orders.',
+        'The quotation and estimated completion date have been saved. The customer can now review it in My Orders.',
         [
           {
             text: 'OK',
@@ -289,7 +386,7 @@ export default function ReviewRequestScreen({
   };
 
   const declineRequest = async () => {
-    if (isLocked || isBusy) return;
+    if (!canManageQuotation || isBusy) return;
 
     const reason = declineReason.trim();
 
@@ -321,7 +418,7 @@ export default function ReviewRequestScreen({
   };
 
   const confirmDecline = async (reason: string) => {
-    if (isLocked || isBusy) return;
+    if (!canManageQuotation || isBusy) return;
 
     setDeclining(true);
 
@@ -341,10 +438,12 @@ export default function ReviewRequestScreen({
       if (!data || data.length === 0) {
         Alert.alert(
           'Request Not Declined',
-          'The order status may have changed. Return to Manage Orders and refresh.'
+          'The request status may have changed. Return to Manage Orders and refresh.'
         );
         return;
       }
+
+      setReviewStatus('declined');
 
       Alert.alert(
         'Request Declined',
@@ -378,15 +477,8 @@ export default function ReviewRequestScreen({
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
       >
+        {/* Request heading */}
         <View style={styles.introCard}>
-          <View style={styles.introIcon}>
-            <Ionicons
-              name="shirt-outline"
-              size={28}
-              color="#d96b8a"
-            />
-          </View>
-
           <Text style={styles.heading}>
             Custom Order Request
           </Text>
@@ -397,11 +489,21 @@ export default function ReviewRequestScreen({
 
           <View style={styles.statusBadge}>
             <Text style={styles.statusText}>
-              {formatStatus(order.status)}
+              {formatStatus(reviewStatus)}
             </Text>
           </View>
+
+          {reviewUpdating && (
+            <View style={styles.reviewUpdating}>
+              <ActivityIndicator size="small" color="#d96b8a" />
+              <Text style={styles.mutedText}>
+                Updating request status...
+              </Text>
+            </View>
+          )}
         </View>
 
+        {/* Customer information */}
         <Text style={styles.sectionTitle}>
           Customer Information
         </Text>
@@ -433,10 +535,11 @@ export default function ReviewRequestScreen({
             label="Date Submitted"
             value={new Date(
               order.created_at
-            ).toLocaleDateString()}
+            ).toLocaleDateString('en-PH')}
           />
         </View>
 
+        {/* Garment requirements */}
         <Text style={styles.sectionTitle}>
           Garment Requirements
         </Text>
@@ -446,7 +549,7 @@ export default function ReviewRequestScreen({
             Garment Description
           </Text>
           <Text style={styles.description}>
-            {order.garment_description}
+            {order.garment_description || 'No description provided.'}
           </Text>
 
           <Text style={styles.fieldLabel}>
@@ -466,13 +569,11 @@ export default function ReviewRequestScreen({
           </Text>
 
           <Text style={styles.fieldLabel}>
-            Needed-by Date
+            Customer's Needed-by Date
           </Text>
           <Text style={styles.description}>
-            {order.needed_by_date
-              ? new Date(
-                  `${order.needed_by_date}T12:00:00`
-                ).toLocaleDateString()
+            {neededByDate
+              ? formatDate(neededByDate)
               : 'No preferred date specified.'}
           </Text>
 
@@ -485,6 +586,7 @@ export default function ReviewRequestScreen({
           </Text>
         </View>
 
+        {/* Reference image */}
         <Text style={styles.sectionTitle}>
           Reference Image
         </Text>
@@ -527,6 +629,7 @@ export default function ReviewRequestScreen({
           )}
         </View>
 
+        {/* Quotation */}
         <Text style={styles.sectionTitle}>
           Quotation Details
         </Text>
@@ -535,7 +638,7 @@ export default function ReviewRequestScreen({
           {order.quoted_price != null && (
             <View style={styles.existingQuote}>
               <Text style={styles.existingQuoteLabel}>
-                Current Quotation
+                Previous Quotation
               </Text>
 
               <Text style={styles.existingQuoteAmount}>
@@ -544,7 +647,7 @@ export default function ReviewRequestScreen({
 
               {order.deposit_amount != null && (
                 <Text style={styles.mutedText}>
-                  Deposit:{' '}
+                  Required deposit:{' '}
                   {formatMoney(Number(order.deposit_amount))}
                 </Text>
               )}
@@ -552,169 +655,159 @@ export default function ReviewRequestScreen({
               {order.estimated_completion_date && (
                 <Text style={styles.mutedText}>
                   Estimated completion:{' '}
-                  {new Date(
-                    `${order.estimated_completion_date}T12:00:00`
-                  ).toLocaleDateString()}
+                  {formatDate(
+                    new Date(
+                      `${order.estimated_completion_date}T12:00:00`
+                    )
+                  )}
                 </Text>
               )}
             </View>
           )}
 
-          <Text style={styles.fieldLabel}>
-            Estimated Completion Date *
-          </Text>
-
-          <TouchableOpacity
-            style={[
-              styles.dateButton,
-              isLocked && styles.readOnlyInput,
-            ]}
-            onPress={() => setShowDatePicker(true)}
-            disabled={isLocked || isBusy}
-            activeOpacity={0.7}
-          >
-            <Ionicons
-              name="calendar-outline"
-              size={20}
-              color="#d96b8a"
-            />
-
-            <Text
-              style={[
-                styles.dateButtonText,
-                !estimatedCompletionDate &&
-                  styles.placeholderText,
-              ]}
-            >
-              {estimatedCompletionDate
-                ? formatDate(estimatedCompletionDate)
-                : 'Select estimated completion date'}
-            </Text>
-
-            {!isLocked && (
-              <Ionicons
-                name="chevron-down"
-                size={18}
-                color="#98727f"
-              />
-            )}
-          </TouchableOpacity>
-
-          {showDatePicker && (
-            <View style={styles.datePickerContainer}>
-              <DateTimePicker
-                value={estimatedCompletionDate ?? new Date()}
-                mode="date"
-                minimumDate={new Date()}
-                display="default"
-                onValueChange={handleDateValueChange}
-                onDismiss={handleDateDismiss}
-              />
+          {canManageQuotation ? (
+            <>
+              <Text style={styles.fieldLabel}>
+                Estimated Completion Date *
+              </Text>
 
               <TouchableOpacity
-                style={styles.doneDateButton}
-                onPress={() => setShowDatePicker(false)}
+                style={styles.dateButton}
+                onPress={() => setShowDatePicker(true)}
+                disabled={isBusy}
+                activeOpacity={0.7}
               >
-                <Text style={styles.doneDateText}>
-                  Done
+                <Ionicons
+                  name="calendar-outline"
+                  size={20}
+                  color="#d96b8a"
+                />
+
+                <Text
+                  style={[
+                    styles.dateButtonText,
+                    !estimatedCompletionDate &&
+                      styles.placeholderText,
+                  ]}
+                >
+                  {estimatedCompletionDate
+                    ? formatDate(estimatedCompletionDate)
+                    : 'Select estimated completion date'}
                 </Text>
+
+                <Ionicons
+                  name="chevron-down"
+                  size={18}
+                  color="#98727f"
+                />
               </TouchableOpacity>
-            </View>
-          )}
 
-          <Text style={styles.dateHelper}>
-            This is the date the staff expects the garment to be finished. It may differ from the customer's needed-by date.
-          </Text>
+              {showDatePicker && (
+                <View style={styles.datePickerContainer}>
+                  <DateTimePicker
+                    value={estimatedCompletionDate ?? new Date()}
+                    mode="date"
+                    minimumDate={new Date()}
+                    display="default"
+                    onValueChange={handleDateValueChange}
+                    onDismiss={handleDateDismiss}
+                  />
 
-          <Text style={styles.fieldLabel}>
-            Total Price (₱) *
-          </Text>
+                  <TouchableOpacity
+                    style={styles.doneDateButton}
+                    onPress={() => setShowDatePicker(false)}
+                  >
+                    <Text style={styles.doneDateText}>
+                      Done
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              )}
 
-          <TextInput
-            style={[
-              styles.input,
-              isLocked && styles.readOnlyInput,
-            ]}
-            value={quotedPrice}
-            onChangeText={setQuotedPrice}
-            placeholder="e.g. 1500"
-            placeholderTextColor="#999"
-            keyboardType="decimal-pad"
-            editable={!isLocked && !isBusy}
-          />
+              <Text style={styles.dateHelper}>
+                This is the date staff expects the garment to be finished. It may differ from the customer's needed-by date.
+              </Text>
 
-          <Text style={styles.fieldLabel}>
-            Required Deposit (₱) *
-          </Text>
+              {dateIsLate && (
+                <View style={styles.warningBox}>
+                  <Ionicons
+                    name="warning-outline"
+                    size={18}
+                    color="#a66b20"
+                  />
+                  <Text style={styles.warningText}>
+                    Your estimated completion date is later than the customer's needed-by date. Please confirm that the customer can accept this schedule.
+                  </Text>
+                </View>
+              )}
 
-          <TextInput
-            style={[
-              styles.input,
-              isLocked && styles.readOnlyInput,
-            ]}
-            value={depositAmount}
-            onChangeText={setDepositAmount}
-            placeholder="e.g. 500"
-            placeholderTextColor="#999"
-            keyboardType="decimal-pad"
-            editable={!isLocked && !isBusy}
-          />
+              <Text style={styles.fieldLabel}>
+                Total Price (₱) *
+              </Text>
 
-          {quotedPrice.trim() !== '' &&
-            depositAmount.trim() !== '' &&
-            Number.isFinite(Number(quotedPrice)) &&
-            Number.isFinite(Number(depositAmount)) &&
-            Number(quotedPrice) >= Number(depositAmount) &&
-            Number(quotedPrice) > 0 &&
-            Number(depositAmount) >= 0 && (
-              <View style={styles.balanceBox}>
-                <Text style={styles.balanceLabel}>
-                  Remaining Balance
-                </Text>
-
-                <Text style={styles.balanceAmount}>
-                  {formatMoney(
-                    Number(quotedPrice) -
-                      Number(depositAmount)
-                  )}
-                </Text>
-              </View>
-            )}
-
-          <Text style={styles.fieldLabel}>
-            Quotation Note (Optional)
-          </Text>
-
-          <TextInput
-            style={[
-              styles.input,
-              styles.noteInput,
-              isLocked && styles.readOnlyInput,
-            ]}
-            value={quotationNote}
-            onChangeText={setQuotationNote}
-            placeholder="Add pricing details, included alterations, or payment reminders..."
-            placeholderTextColor="#999"
-            multiline
-            textAlignVertical="top"
-            editable={!isLocked && !isBusy}
-          />
-
-          {isLocked ? (
-            <View style={styles.lockedNotice}>
-              <Ionicons
-                name="lock-closed-outline"
-                size={18}
-                color="#8a6470"
+              <TextInput
+                style={styles.input}
+                value={quotedPrice}
+                onChangeText={setQuotedPrice}
+                placeholder="e.g. 1500"
+                placeholderTextColor="#999"
+                keyboardType="decimal-pad"
+                editable={!isBusy}
               />
 
-              <Text style={styles.lockedText}>
-                This order cannot be changed because it is already{' '}
-                {formatStatus(order.status).toLowerCase()}.
+              <Text style={styles.fieldLabel}>
+                Required Online Deposit (₱) *
               </Text>
-            </View>
-          ) : (
-            <>
+
+              <TextInput
+                style={styles.input}
+                value={depositAmount}
+                onChangeText={setDepositAmount}
+                placeholder="e.g. 500"
+                placeholderTextColor="#999"
+                keyboardType="decimal-pad"
+                editable={!isBusy}
+              />
+
+              {quotedPrice.trim() !== '' &&
+                depositAmount.trim() !== '' &&
+                Number.isFinite(Number(quotedPrice)) &&
+                Number.isFinite(Number(depositAmount)) &&
+                Number(quotedPrice) >= Number(depositAmount) &&
+                Number(quotedPrice) > 0 &&
+                Number(depositAmount) > 0 && (
+                  <View style={styles.balanceBox}>
+                    <Text style={styles.balanceLabel}>
+                      Remaining Balance (Cash at Pickup)
+                    </Text>
+
+                    <Text style={styles.balanceAmount}>
+                      {formatMoney(
+                        Number(quotedPrice) -
+                          Number(depositAmount)
+                      )}
+                    </Text>
+                  </View>
+                )}
+
+              <Text style={styles.fieldLabel}>
+                Quotation Note (Optional)
+              </Text>
+
+              <TextInput
+                style={[
+                  styles.input,
+                  styles.noteInput,
+                ]}
+                value={quotationNote}
+                onChangeText={setQuotationNote}
+                placeholder="Add pricing details, included alterations, or payment reminders..."
+                placeholderTextColor="#999"
+                multiline
+                textAlignVertical="top"
+                editable={!isBusy}
+              />
+
               <TouchableOpacity
                 style={[
                   styles.sendButton,
@@ -734,14 +827,16 @@ export default function ReviewRequestScreen({
                       color="#fff"
                     />
                     <Text style={styles.sendButtonText}>
-                      Save and Send Quotation
+                      {reviewStatus === 'quotation_sent'
+                        ? 'Update and Resend Quotation'
+                        : 'Save and Send Quotation'}
                     </Text>
                   </>
                 )}
               </TouchableOpacity>
 
               <Text style={styles.helperText}>
-                Sending a quotation does not process a payment. The customer must respond to the quotation in My Orders.
+                Sending a quotation does not process a payment. The customer must accept the quotation before paying the online deposit.
               </Text>
 
               <View style={styles.declineDivider} />
@@ -803,6 +898,32 @@ export default function ReviewRequestScreen({
                 Declining the request is separate from the customer declining a quotation.
               </Text>
             </>
+          ) : (
+            <View style={styles.lockedNotice}>
+              <Ionicons
+                name="lock-closed-outline"
+                size={19}
+                color="#8a6470"
+              />
+
+              <View style={styles.lockedContent}>
+                <Text style={styles.lockedTitle}>
+                  Quotation Editing Unavailable
+                </Text>
+
+                <Text style={styles.lockedText}>
+                  {reviewStatus === 'accepted'
+                    ? 'The customer has accepted the quotation. This request can now proceed to deposit and production.'
+                    : reviewStatus === 'declined'
+                    ? 'This request has been declined.'
+                    : reviewStatus === 'completed'
+                    ? 'This order has already been completed.'
+                    : reviewStatus === 'cancelled'
+                    ? 'This request has been cancelled.'
+                    : 'This order has progressed beyond the quotation stage. Quotation editing and request declining are no longer available here.'}
+                </Text>
+              </View>
+            </View>
           )}
         </View>
       </ScrollView>
@@ -852,15 +973,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#f0e6e9',
   },
-  introIcon: {
-    width: 58,
-    height: 58,
-    borderRadius: 18,
-    backgroundColor: '#fff0f4',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
   heading: {
     fontSize: 21,
     fontWeight: 'bold',
@@ -885,6 +997,12 @@ const styles = StyleSheet.create({
     color: '#b44e70',
     fontSize: 12,
     fontWeight: 'bold',
+  },
+  reviewUpdating: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 12,
   },
   sectionTitle: {
     fontSize: 18,
@@ -983,10 +1101,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#333',
   },
-  readOnlyInput: {
-    backgroundColor: '#f7f3f4',
-    opacity: 0.8,
-  },
   noteInput: {
     minHeight: 100,
     textAlignVertical: 'top',
@@ -1034,21 +1148,36 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     marginTop: 7,
   },
-  balanceBox: {
+  warningBox: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
+    gap: 9,
+    backgroundColor: '#fff7e9',
+    borderWidth: 1,
+    borderColor: '#f1dfbd',
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 10,
+  },
+  warningText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#8b6229',
+  },
+  balanceBox: {
     backgroundColor: '#fff8fa',
     borderRadius: 9,
     padding: 12,
     marginTop: 12,
+    gap: 5,
   },
   balanceLabel: {
     fontSize: 12,
     color: '#76515e',
   },
   balanceAmount: {
-    fontSize: 15,
+    fontSize: 17,
     fontWeight: 'bold',
     color: '#b44e70',
   },
@@ -1115,15 +1244,23 @@ const styles = StyleSheet.create({
   },
   lockedNotice: {
     flexDirection: 'row',
-    gap: 9,
-    alignItems: 'center',
+    gap: 10,
+    alignItems: 'flex-start',
     backgroundColor: '#f7f0f2',
     borderRadius: 10,
-    padding: 13,
-    marginTop: 18,
+    padding: 14,
+    marginTop: 10,
+  },
+  lockedContent: {
+    flex: 1,
+  },
+  lockedTitle: {
+    color: '#76515e',
+    fontSize: 13,
+    fontWeight: 'bold',
+    marginBottom: 5,
   },
   lockedText: {
-    flex: 1,
     color: '#76515e',
     fontSize: 12,
     lineHeight: 18,

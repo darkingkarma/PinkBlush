@@ -1,561 +1,216 @@
-import {
-  useCallback,
-  useState,
-} from 'react';
+import { useEffect, useState } from 'react';
 
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
   KeyboardAvoidingView,
   Modal,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
-  useWindowDimensions,
 } from 'react-native';
 
-import {
-  useFocusEffect,
-} from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 
-import {
-  Ionicons,
-} from '@expo/vector-icons';
+import { supabase } from '../../../supabase';
 
-import {
-  supabase,
-} from '../../../supabase';
+export default function PersonalDetailsScreen() {
+  const navigation = useNavigation<any>();
 
-type Category = {
-  id: string;
-  name: string;
-  description: string | null;
-  is_available: boolean;
-  created_at?: string;
-};
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-export default function GarmentCategoriesScreen() {
-  const { width } = useWindowDimensions();
+  const [modalVisible, setModalVisible] = useState(false);
 
-  const isSmallScreen = width < 380;
+  // Displayed profile information
+  const [username, setUsername] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [contactNumber, setContactNumber] = useState('');
+  const [email, setEmail] = useState('');
 
-  const [categories, setCategories] =
-    useState<Category[]>([]);
-
-  const [loading, setLoading] =
-    useState(true);
-
-  const [saving, setSaving] =
-    useState(false);
-
-  const [modalVisible, setModalVisible] =
-    useState(false);
-
-  const [editingCategory, setEditingCategory] =
-    useState<Category | null>(null);
-
-  const [name, setName] =
-    useState('');
-
-  const [description, setDescription] =
-    useState('');
-
-  const [isAvailable, setIsAvailable] =
-    useState(true);
+  // Temporary edit values
+  const [editUsername, setEditUsername] = useState('');
+  const [editFullName, setEditFullName] = useState('');
+  const [editContactNumber, setEditContactNumber] = useState('');
 
   // =====================================================
-  // LOAD CATEGORIES
+  // LOAD PERSONAL DETAILS
   // =====================================================
 
-  const getCategories = useCallback(
-    async () => {
-      setLoading(true);
+  const loadPersonalDetails = async () => {
+    setLoading(true);
 
+    try {
       const {
-        data,
-        error,
-      } = await supabase
-        .from('garment_categories')
-        .select(
-          'id, name, description, is_available, created_at'
-        )
-        .order('created_at', {
-          ascending: false,
-        });
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
 
-      if (error) {
+      if (authError || !user) {
         Alert.alert(
           'Error',
-          error.message
+          'Unable to retrieve your account information.'
         );
 
         setLoading(false);
         return;
       }
 
-      setCategories(data || []);
+      const {
+        data,
+        error,
+      } = await supabase
+        .from('profiles')
+        .select('username, full_name, contact_number, email')
+        .eq('id', user.id)
+        .single();
+
+      if (error) {
+        Alert.alert('Error', error.message);
+        setLoading(false);
+        return;
+      }
+
+      setUsername(data.username || '');
+      setFullName(data.full_name || '');
+      setContactNumber(data.contact_number || '');
+      setEmail(data.email || user.email || '');
+
+    } catch (error: any) {
+      Alert.alert(
+        'Error',
+        error.message || 'Something went wrong.'
+      );
+    } finally {
       setLoading(false);
-    },
-    []
-  );
-
-  useFocusEffect(
-    useCallback(() => {
-      void getCategories();
-    }, [getCategories])
-  );
-
-  // =====================================================
-  // OPEN ADD MODAL
-  // =====================================================
-
-  const openAddModal = () => {
-    setEditingCategory(null);
-    setName('');
-    setDescription('');
-    setIsAvailable(true);
-    setModalVisible(true);
+    }
   };
+
+  useEffect(() => {
+    void loadPersonalDetails();
+  }, []);
 
   // =====================================================
   // OPEN EDIT MODAL
   // =====================================================
 
-  const openEditModal = (
-    category: Category
-  ) => {
-    setEditingCategory(category);
-
-    setName(category.name);
-
-    setDescription(
-      category.description || ''
-    );
-
-    setIsAvailable(
-      category.is_available
-    );
+  const openEditModal = () => {
+    setEditUsername(username);
+    setEditFullName(fullName);
+    setEditContactNumber(contactNumber);
 
     setModalVisible(true);
   };
 
   // =====================================================
-  // CLOSE MODAL
+  // CLOSE EDIT MODAL
   // =====================================================
 
   const closeModal = () => {
     if (saving) return;
 
     setModalVisible(false);
-    setEditingCategory(null);
-    setName('');
-    setDescription('');
-    setIsAvailable(true);
+
+    setEditUsername('');
+    setEditFullName('');
+    setEditContactNumber('');
   };
 
   // =====================================================
-  // SAVE CATEGORY
+  // SAVE PROFILE
   // =====================================================
 
-  const saveCategory = async () => {
-    if (!name.trim()) {
+  const saveProfile = async () => {
+    if (!editUsername.trim()) {
       Alert.alert(
-        'Error',
-        'Please enter a category name.'
+        'Required Field',
+        'Please enter your username.'
       );
+      return;
+    }
 
+    if (!editFullName.trim()) {
+      Alert.alert(
+        'Required Field',
+        'Please enter your full name.'
+      );
       return;
     }
 
     setSaving(true);
 
-    const categoryData = {
-      name: name.trim(),
-      description:
-        description.trim() || null,
-      is_available: isAvailable,
-    };
+    try {
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
 
-    if (editingCategory) {
-      // =================================================
-      // UPDATE EXISTING CATEGORY
-      // =================================================
+      if (authError || !user) {
+        Alert.alert(
+          'Error',
+          'Unable to verify your account. Please log in again.'
+        );
+
+        setSaving(false);
+        return;
+      }
 
       const {
         error,
       } = await supabase
-        .from('garment_categories')
-        .update(categoryData)
-        .eq(
-          'id',
-          editingCategory.id
-        );
+        .from('profiles')
+        .update({
+          username: editUsername.trim(),
+          full_name: editFullName.trim(),
+          contact_number: editContactNumber.trim(),
+        })
+        .eq('id', user.id);
 
       if (error) {
         setSaving(false);
 
+        if (error.code === '23505') {
+          Alert.alert(
+            'Username Already Taken',
+            'This username is already being used. Please choose another username.'
+          );
+          return;
+        }
+
         Alert.alert(
-          'Error',
+          'Update Failed',
           error.message
         );
 
         return;
       }
 
-      setSaving(false);
-      setModalVisible(false);
-
-      setEditingCategory(null);
-      setName('');
-      setDescription('');
-      setIsAvailable(true);
-
-      Alert.alert(
-        'Success',
-        'Category updated successfully.'
-      );
-
-      void getCategories();
-
-    } else {
-      // =================================================
-      // ADD NEW CATEGORY
-      // =================================================
-
-      const {
-        error,
-      } = await supabase
-        .from('garment_categories')
-        .insert(categoryData);
-
-      if (error) {
-        setSaving(false);
-
-        Alert.alert(
-          'Error',
-          error.message
-        );
-
-        return;
-      }
+      // Update displayed information
+      setUsername(editUsername.trim());
+      setFullName(editFullName.trim());
+      setContactNumber(editContactNumber.trim());
 
       setSaving(false);
       setModalVisible(false);
 
-      setEditingCategory(null);
-      setName('');
-      setDescription('');
-      setIsAvailable(true);
-
       Alert.alert(
         'Success',
-        'Category added successfully.'
+        'Your personal details have been updated successfully.'
       );
 
-      void getCategories();
+    } catch (error: any) {
+      setSaving(false);
+
+      Alert.alert(
+        'Error',
+        error.message || 'Something went wrong while updating your profile.'
+      );
     }
-  };
-
-  // =====================================================
-  // TOGGLE CATEGORY AVAILABILITY
-  // =====================================================
-
-  const toggleAvailability = (
-    category: Category
-  ) => {
-    const newAvailability =
-      !category.is_available;
-
-    const actionText =
-      newAvailability
-        ? 'enable'
-        : 'disable';
-
-    const statusText =
-      newAvailability
-        ? 'available'
-        : 'unavailable';
-
-    Alert.alert(
-      `${newAvailability ? 'Enable' : 'Disable'} Category`,
-      `Are you sure you want to ${actionText} "${category.name}"?`,
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-
-        {
-          text:
-            newAvailability
-              ? 'Enable'
-              : 'Disable',
-
-          onPress: async () => {
-            const {
-              error,
-            } = await supabase
-              .from('garment_categories')
-              .update({
-                is_available:
-                  newAvailability,
-              })
-              .eq(
-                'id',
-                category.id
-              );
-
-            if (error) {
-              Alert.alert(
-                'Error',
-                error.message
-              );
-
-              return;
-            }
-
-            Alert.alert(
-              'Success',
-              `${category.name} is now ${statusText}.`
-            );
-
-            void getCategories();
-          },
-        },
-      ]
-    );
-  };
-
-  // =====================================================
-  // DELETE CATEGORY
-  // =====================================================
-
-  const deleteCategory = (
-    category: Category
-  ) => {
-    Alert.alert(
-      'Delete Category',
-      `Are you sure you want to permanently delete "${category.name}"?`,
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-
-        {
-          text: 'Delete',
-          style: 'destructive',
-
-          onPress: async () => {
-            const {
-              error,
-            } = await supabase
-              .from('garment_categories')
-              .delete()
-              .eq(
-                'id',
-                category.id
-              );
-
-            if (error) {
-              Alert.alert(
-                'Error',
-                error.message
-              );
-
-              return;
-            }
-
-            Alert.alert(
-              'Success',
-              'Category deleted successfully.'
-            );
-
-            void getCategories();
-          },
-        },
-      ]
-    );
-  };
-
-  // =====================================================
-  // RENDER CATEGORY
-  // =====================================================
-
-  const renderCategory = ({
-    item,
-  }: {
-    item: Category;
-  }) => {
-    return (
-      <View style={styles.card}>
-
-        {/* CATEGORY ICON */}
-
-        <View style={styles.cardIcon}>
-          <Ionicons
-            name="shirt-outline"
-            size={28}
-            color="#d96b8a"
-          />
-        </View>
-
-        {/* CATEGORY INFORMATION */}
-
-        <View
-          style={[
-            styles.info,
-            isSmallScreen &&
-              styles.infoSmall,
-          ]}
-        >
-          <Text
-            style={styles.name}
-            numberOfLines={1}
-          >
-            {item.name}
-          </Text>
-
-          {item.description ? (
-            <Text
-              style={styles.description}
-              numberOfLines={2}
-            >
-              {item.description}
-            </Text>
-          ) : (
-            <Text
-              style={
-                styles.noDescription
-              }
-            >
-              No description
-            </Text>
-          )}
-
-          {/* AVAILABILITY STATUS */}
-
-          <View
-            style={
-              styles.statusContainer
-            }
-          >
-            <View
-              style={[
-                styles.statusDot,
-                item.is_available
-                  ? styles.availableDot
-                  : styles.unavailableDot,
-              ]}
-            />
-
-            <Text
-              style={[
-                styles.statusText,
-                item.is_available
-                  ? styles.availableText
-                  : styles.unavailableText,
-              ]}
-            >
-              {item.is_available
-                ? 'Available'
-                : 'Unavailable'}
-            </Text>
-          </View>
-        </View>
-
-        {/* ACTION BUTTONS */}
-
-        <View
-          style={[
-            styles.actions,
-            isSmallScreen &&
-              styles.actionsSmall,
-          ]}
-        >
-
-          {/* EDIT */}
-
-          <TouchableOpacity
-            style={styles.editButton}
-            onPress={() =>
-              openEditModal(item)
-            }
-          >
-            <Ionicons
-              name="create-outline"
-              size={18}
-              color="#fff"
-            />
-
-            <Text
-              style={styles.buttonText}
-            >
-              Edit
-            </Text>
-          </TouchableOpacity>
-
-          {/* ENABLE / DISABLE */}
-
-          <TouchableOpacity
-            style={[
-              styles.availabilityButton,
-              item.is_available
-                ? styles.disableButton
-                : styles.enableButton,
-            ]}
-            onPress={() =>
-              toggleAvailability(item)
-            }
-          >
-            <Ionicons
-              name={
-                item.is_available
-                  ? 'eye-off-outline'
-                  : 'eye-outline'
-              }
-              size={18}
-              color="#fff"
-            />
-
-            <Text
-              style={styles.buttonText}
-            >
-              {item.is_available
-                ? 'Disable'
-                : 'Enable'}
-            </Text>
-          </TouchableOpacity>
-
-          {/* DELETE */}
-
-          <TouchableOpacity
-            style={styles.deleteButton}
-            onPress={() =>
-              deleteCategory(item)
-            }
-          >
-            <Ionicons
-              name="trash-outline"
-              size={18}
-              color="#fff"
-            />
-
-            <Text
-              style={styles.buttonText}
-            >
-              Delete
-            </Text>
-          </TouchableOpacity>
-
-        </View>
-
-      </View>
-    );
   };
 
   // =====================================================
@@ -568,120 +223,180 @@ export default function GarmentCategoriesScreen() {
       {/* HEADER */}
 
       <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+        >
+          <Ionicons
+            name="arrow-back"
+            size={22}
+            color="#333"
+          />
+        </TouchableOpacity>
 
         <View style={styles.headerTextContainer}>
           <Text style={styles.title}>
-            Garment Categories
+            Personal Details
           </Text>
 
           <Text style={styles.subtitle}>
-            Manage your garment categories
+            Manage your personal information
           </Text>
         </View>
-
-        <View style={styles.countBadge}>
-          <Text style={styles.countText}>
-            {categories.length}
-          </Text>
-
-          <Text style={styles.countLabel}>
-            Categories
-          </Text>
-        </View>
-
       </View>
 
-      {/* ADD BUTTON */}
-
-      <TouchableOpacity
-        style={styles.addButton}
-        onPress={openAddModal}
-      >
-        <Ionicons
-          name="add"
-          size={22}
-          color="#fff"
-        />
-
-        <Text style={styles.addButtonText}>
-          Add Category
-        </Text>
-      </TouchableOpacity>
-
-      {/* CATEGORY LIST */}
-
       {loading ? (
-        <View
-          style={
-            styles.loadingContainer
-          }
-        >
+        <View style={styles.loadingContainer}>
           <ActivityIndicator
             size="large"
             color="#d96b8a"
           />
 
-          <Text
-            style={styles.loadingText}
-          >
-            Loading categories...
+          <Text style={styles.loadingText}>
+            Loading your details...
           </Text>
         </View>
       ) : (
-        <FlatList
-          data={categories}
-          keyExtractor={(item) =>
-            item.id
-          }
-          showsVerticalScrollIndicator={
-            false
-          }
-          contentContainerStyle={
-            styles.list
-          }
-          renderItem={
-            renderCategory
-          }
-          ListEmptyComponent={
-            <View
-              style={
-                styles.emptyContainer
-              }
-            >
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.content}
+        >
+
+          {/* PROFILE INFORMATION */}
+
+          <View style={styles.profileCard}>
+
+            <View style={styles.profileIcon}>
               <Ionicons
-                name="shirt-outline"
-                size={55}
-                color="#ddd"
+                name="person-outline"
+                size={32}
+                color="#d96b8a"
               />
+            </View>
 
-              <Text
-                style={styles.emptyTitle}
-              >
-                No Categories Yet
-              </Text>
+            <Text style={styles.profileName}>
+              {fullName || 'Your Name'}
+            </Text>
 
-              <Text
-                style={styles.emptyText}
-              >
-                Add your first garment
-                category to get started.
+            <Text style={styles.profileEmail}>
+              {email || 'No email available'}
+            </Text>
+
+            <View style={styles.customerBadge}>
+              <Text style={styles.customerBadgeText}>
+                PINK BLUSH CUSTOMER
               </Text>
             </View>
-          }
-        />
+
+          </View>
+
+          {/* PERSONAL INFORMATION */}
+
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>
+              Personal Information
+            </Text>
+          </View>
+
+          <View style={styles.detailsCard}>
+
+            {/* USERNAME */}
+
+            <View style={styles.detailItem}>
+              <Text style={styles.detailLabel}>
+                Username
+              </Text>
+
+              <Text style={styles.detailValue}>
+                {username || 'Not provided'}
+              </Text>
+            </View>
+
+            <View style={styles.detailDivider} />
+
+            {/* FULL NAME */}
+
+            <View style={styles.detailItem}>
+              <Text style={styles.detailLabel}>
+                Full Name
+              </Text>
+
+              <Text style={styles.detailValue}>
+                {fullName || 'Not provided'}
+              </Text>
+            </View>
+
+            <View style={styles.detailDivider} />
+
+            {/* CONTACT NUMBER */}
+
+            <View style={styles.detailItem}>
+              <Text style={styles.detailLabel}>
+                Contact Number
+              </Text>
+
+              <Text style={styles.detailValue}>
+                {contactNumber || 'Not provided'}
+              </Text>
+            </View>
+
+            <View style={styles.detailDivider} />
+
+            {/* EMAIL */}
+
+            <View style={styles.detailItem}>
+              <View style={styles.emailLabelContainer}>
+                <Text style={styles.detailLabel}>
+                  Email Address
+                </Text>
+
+                <View style={styles.readOnlyBadge}>
+                  <Text style={styles.readOnlyText}>
+                    Read-only
+                  </Text>
+                </View>
+              </View>
+
+              <Text style={styles.detailValue}>
+                {email || 'Not provided'}
+              </Text>
+            </View>
+
+          </View>
+
+          {/* EDIT PROFILE BUTTON */}
+
+          <TouchableOpacity
+            style={styles.editButton}
+            onPress={openEditModal}
+          >
+            <Ionicons
+              name="create-outline"
+              size={20}
+              color="#fff"
+            />
+
+            <Text style={styles.editButtonText}>
+              Edit Profile
+            </Text>
+          </TouchableOpacity>
+
+          <Text style={styles.noteText}>
+            Keep your personal information updated so we can contact you about your orders.
+          </Text>
+
+        </ScrollView>
       )}
 
       {/* =====================================================
-          ADD / EDIT MODAL
+          EDIT PROFILE MODAL
           ===================================================== */}
 
       <Modal
         visible={modalVisible}
         animationType="slide"
         transparent
-        onRequestClose={
-          closeModal
-        }
+        onRequestClose={closeModal}
       >
         <KeyboardAvoidingView
           style={styles.modalOverlay}
@@ -691,234 +406,154 @@ export default function GarmentCategoriesScreen() {
               : undefined
           }
         >
-          <View
-            style={styles.modalContainer}
-          >
+          <View style={styles.modalContainer}>
 
-            {/* MODAL HEADER */}
-
-            <View
-              style={styles.modalHeader}
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
             >
-              <View
-                style={
-                  styles.modalTitleContainer
-                }
-              >
-                <Text
-                  style={
-                    styles.modalTitle
-                  }
-                >
-                  {editingCategory
-                    ? 'Edit Category'
-                    : 'Add Category'}
-                </Text>
 
-                <Text
-                  style={
-                    styles.modalSubtitle
-                  }
+              {/* MODAL HEADER */}
+
+              <View style={styles.modalHeader}>
+
+                <View style={styles.modalTitleContainer}>
+                  <Text style={styles.modalTitle}>
+                    Edit Profile
+                  </Text>
+
+                  <Text style={styles.modalSubtitle}>
+                    Update your personal information
+                  </Text>
+                </View>
+
+                <TouchableOpacity
+                  style={styles.closeButton}
+                  onPress={closeModal}
+                  disabled={saving}
                 >
-                  {editingCategory
-                    ? 'Update category information'
-                    : 'Create a new garment category'}
-                </Text>
+                  <Ionicons
+                    name="close"
+                    size={24}
+                    color="#555"
+                  />
+                </TouchableOpacity>
+
               </View>
 
+              {/* USERNAME */}
+
+              <Text style={styles.label}>
+                Username
+              </Text>
+
+              <TextInput
+                style={styles.input}
+                placeholder="Enter your username"
+                placeholderTextColor="#999"
+                value={editUsername}
+                onChangeText={setEditUsername}
+                autoCapitalize="none"
+                editable={!saving}
+              />
+
+              {/* FULL NAME */}
+
+              <Text style={styles.label}>
+                Full Name
+              </Text>
+
+              <TextInput
+                style={styles.input}
+                placeholder="Enter your full name"
+                placeholderTextColor="#999"
+                value={editFullName}
+                onChangeText={setEditFullName}
+                autoCapitalize="words"
+                editable={!saving}
+              />
+
+              {/* CONTACT NUMBER */}
+
+              <Text style={styles.label}>
+                Contact Number
+              </Text>
+
+              <TextInput
+                style={styles.input}
+                placeholder="Enter your contact number"
+                placeholderTextColor="#999"
+                value={editContactNumber}
+                onChangeText={setEditContactNumber}
+                keyboardType="phone-pad"
+                editable={!saving}
+              />
+
+              {/* EMAIL - READ ONLY */}
+
+              <Text style={styles.label}>
+                Email Address
+              </Text>
+
+              <View style={styles.readOnlyInput}>
+                <Text
+                  style={styles.readOnlyInputText}
+                  numberOfLines={1}
+                >
+                  {email || 'No email available'}
+                </Text>
+
+                <Ionicons
+                  name="lock-closed-outline"
+                  size={18}
+                  color="#999"
+                />
+              </View>
+
+              <Text style={styles.emailNote}>
+                Your email address cannot be changed here because it is connected to your login account.
+              </Text>
+
+              {/* SAVE BUTTON */}
+
               <TouchableOpacity
-                style={
-                  styles.closeButton
-                }
+                style={[
+                  styles.saveButton,
+                  saving && styles.disabledButton,
+                ]}
+                onPress={saveProfile}
+                disabled={saving}
+              >
+                {saving ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons
+                      name="checkmark"
+                      size={21}
+                      color="#fff"
+                    />
+
+                    <Text style={styles.saveButtonText}>
+                      Save Changes
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              {/* CANCEL */}
+
+              <TouchableOpacity
+                style={styles.cancelButton}
                 onPress={closeModal}
                 disabled={saving}
               >
-                <Ionicons
-                  name="close"
-                  size={24}
-                  color="#555"
-                />
+                <Text style={styles.cancelButtonText}>
+                  Cancel
+                </Text>
               </TouchableOpacity>
-            </View>
 
-            {/* CATEGORY NAME */}
-
-            <Text style={styles.label}>
-              Category Name
-            </Text>
-
-            <TextInput
-              style={styles.input}
-              placeholder="Enter category name"
-              placeholderTextColor="#999"
-              value={name}
-              onChangeText={setName}
-              editable={!saving}
-            />
-
-            {/* DESCRIPTION */}
-
-            <Text style={styles.label}>
-              Description
-            </Text>
-
-            <TextInput
-              style={[
-                styles.input,
-                styles.descriptionInput,
-              ]}
-              placeholder="Enter category description"
-              placeholderTextColor="#999"
-              value={description}
-              onChangeText={
-                setDescription
-              }
-              multiline
-              textAlignVertical="top"
-              editable={!saving}
-            />
-
-            {/* AVAILABILITY */}
-
-            <Text style={styles.label}>
-              Availability
-            </Text>
-
-            <TouchableOpacity
-              style={[
-                styles.availabilitySelector,
-                isAvailable
-                  ? styles.availabilitySelectorOn
-                  : styles.availabilitySelectorOff,
-              ]}
-              onPress={() =>
-                setIsAvailable(
-                  !isAvailable
-                )
-              }
-              disabled={saving}
-            >
-              <View
-                style={[
-                  styles.availabilityIcon,
-                  isAvailable
-                    ? styles.availabilityIconOn
-                    : styles.availabilityIconOff,
-                ]}
-              >
-                <Ionicons
-                  name={
-                    isAvailable
-                      ? 'checkmark'
-                      : 'close'
-                  }
-                  size={18}
-                  color="#fff"
-                />
-              </View>
-
-              <View
-                style={
-                  styles.availabilityInfo
-                }
-              >
-                <Text
-                  style={
-                    styles.availabilityTitle
-                  }
-                >
-                  {isAvailable
-                    ? 'Available'
-                    : 'Unavailable'}
-                </Text>
-
-                <Text
-                  style={
-                    styles.availabilityDescription
-                  }
-                >
-                  {isAvailable
-                    ? 'Customers can see and select this category.'
-                    : 'Customers cannot see or select this category.'}
-                </Text>
-              </View>
-
-              <View
-                style={[
-                  styles.switchTrack,
-                  isAvailable
-                    ? styles.switchTrackOn
-                    : styles.switchTrackOff,
-                ]}
-              >
-                <View
-                  style={[
-                    styles.switchThumb,
-                    isAvailable
-                      ? styles.switchThumbOn
-                      : styles.switchThumbOff,
-                  ]}
-                />
-              </View>
-            </TouchableOpacity>
-
-            {/* SAVE BUTTON */}
-
-            <TouchableOpacity
-              style={[
-                styles.saveButton,
-                saving &&
-                  styles.disabledButton,
-              ]}
-              onPress={saveCategory}
-              disabled={saving}
-            >
-              {saving ? (
-                <ActivityIndicator
-                  color="#fff"
-                />
-              ) : (
-                <>
-                  <Ionicons
-                    name={
-                      editingCategory
-                        ? 'checkmark'
-                        : 'add'
-                    }
-                    size={21}
-                    color="#fff"
-                  />
-
-                  <Text
-                    style={
-                      styles.saveButtonText
-                    }
-                  >
-                    {editingCategory
-                      ? 'Save Changes'
-                      : 'Add Category'}
-                  </Text>
-                </>
-              )}
-            </TouchableOpacity>
-
-            {/* CANCEL */}
-
-            <TouchableOpacity
-              style={
-                styles.cancelButton
-              }
-              onPress={closeModal}
-              disabled={saving}
-            >
-              <Text
-                style={
-                  styles.cancelButtonText
-                }
-              >
-                Cancel
-              </Text>
-            </TouchableOpacity>
+            </ScrollView>
 
           </View>
         </KeyboardAvoidingView>
@@ -933,230 +568,204 @@ export default function GarmentCategoriesScreen() {
 // =====================================================
 
 const styles = StyleSheet.create({
+
   container: {
     flex: 1,
     backgroundColor: '#FFF8FA',
     padding: 20,
   },
 
+  // =====================================================
+  // HEADER
+  // =====================================================
+
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 18,
+    marginBottom: 22,
+  },
+
+  backButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    borderWidth: 1,
+    borderColor: '#f0e2e7',
   },
 
   headerTextContainer: {
     flex: 1,
-    paddingRight: 10,
   },
 
   title: {
-    fontSize: 24,
+    fontSize: 23,
     fontWeight: '700',
     color: '#333',
   },
 
   subtitle: {
-    fontSize: 14,
-    color: '#777',
+    fontSize: 13,
+    color: '#888',
     marginTop: 4,
   },
 
-  countBadge: {
-    backgroundColor: '#FCE7F0',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    alignItems: 'center',
-    minWidth: 75,
-  },
+  // =====================================================
+  // CONTENT
+  // =====================================================
 
-  countText: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#B84470',
-  },
-
-  countLabel: {
-    fontSize: 10,
-    color: '#B84470',
-    marginTop: 1,
-  },
-
-  addButton: {
-    backgroundColor: '#d96b8a',
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 7,
-    marginBottom: 18,
-  },
-
-  addButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-
-  list: {
+  content: {
     paddingBottom: 30,
   },
 
-  // =====================================================
-  // CATEGORY CARD
-  // =====================================================
-
-  card: {
+  profileCard: {
     backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 22,
+    alignItems: 'center',
     borderWidth: 1,
     borderColor: '#f0e2e7',
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
+    marginBottom: 25,
   },
 
-  cardIcon: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+  profileIcon: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     backgroundColor: '#FCE7F0',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
+    marginBottom: 12,
   },
 
-  info: {
-    flex: 1,
-    paddingRight: 8,
+  profileName: {
+    fontSize: 19,
+    fontWeight: '700',
+    color: '#333',
+    textAlign: 'center',
   },
 
-  infoSmall: {
-    minWidth: 0,
+  profileEmail: {
+    fontSize: 13,
+    color: '#888',
+    marginTop: 5,
+    textAlign: 'center',
   },
 
-  name: {
+  customerBadge: {
+    backgroundColor: '#FCE7F0',
+    paddingHorizontal: 13,
+    paddingVertical: 6,
+    borderRadius: 20,
+    marginTop: 12,
+  },
+
+  customerBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#B84470',
+    letterSpacing: 0.5,
+  },
+
+  // =====================================================
+  // SECTION
+  // =====================================================
+
+  sectionHeader: {
+    marginBottom: 12,
+  },
+
+  sectionTitle: {
     fontSize: 17,
     fontWeight: '700',
     color: '#333',
   },
 
-  description: {
-    fontSize: 13,
-    color: '#777',
-    marginTop: 4,
-    lineHeight: 18,
-  },
-
-  noDescription: {
-    fontSize: 13,
-    color: '#aaa',
-    fontStyle: 'italic',
-    marginTop: 4,
-  },
-
   // =====================================================
-  // STATUS
+  // DETAILS CARD
   // =====================================================
 
-  statusContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 7,
+  detailsCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: '#f0e2e7',
   },
 
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 6,
+  detailItem: {
+    paddingVertical: 15,
   },
 
-  availableDot: {
-    backgroundColor: '#28a745',
-  },
-
-  unavailableDot: {
-    backgroundColor: '#999',
-  },
-
-  statusText: {
+  detailLabel: {
     fontSize: 12,
     fontWeight: '600',
+    color: '#999',
+    marginBottom: 6,
   },
 
-  availableText: {
-    color: '#28a745',
+  detailValue: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#333',
   },
 
-  unavailableText: {
+  detailDivider: {
+    height: 1,
+    backgroundColor: '#f1e8eb',
+  },
+
+  emailLabelContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+
+  readOnlyBadge: {
+    backgroundColor: '#f3f3f3',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 5,
+    marginBottom: 6,
+  },
+
+  readOnlyText: {
+    fontSize: 9,
+    fontWeight: '600',
     color: '#888',
   },
 
   // =====================================================
-  // ACTIONS
+  // EDIT BUTTON
   // =====================================================
 
-  actions: {
-    gap: 7,
-  },
-
-  actionsSmall: {
-    marginTop: 12,
-    alignSelf: 'stretch',
-  },
-
   editButton: {
-    backgroundColor: '#777',
-    minWidth: 75,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: 8,
+    backgroundColor: '#d96b8a',
+    paddingVertical: 15,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
-    gap: 4,
+    gap: 8,
+    marginTop: 20,
   },
 
-  availabilityButton: {
-    minWidth: 75,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 4,
-  },
-
-  disableButton: {
-    backgroundColor: '#d99a3d',
-  },
-
-  enableButton: {
-    backgroundColor: '#28a745',
-  },
-
-  deleteButton: {
-    backgroundColor: '#d9534f',
-    minWidth: 75,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 4,
-  },
-
-  buttonText: {
+  editButtonText: {
     color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+
+  noteText: {
     fontSize: 12,
-    fontWeight: '600',
+    color: '#999',
+    textAlign: 'center',
+    lineHeight: 18,
+    marginTop: 13,
+    paddingHorizontal: 10,
   },
 
   // =====================================================
@@ -1173,32 +782,6 @@ const styles = StyleSheet.create({
     marginTop: 10,
     color: '#888',
     fontSize: 14,
-  },
-
-  // =====================================================
-  // EMPTY
-  // =====================================================
-
-  emptyContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingTop: 70,
-    paddingHorizontal: 30,
-  },
-
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#555',
-    marginTop: 15,
-  },
-
-  emptyText: {
-    fontSize: 14,
-    color: '#999',
-    textAlign: 'center',
-    marginTop: 6,
-    lineHeight: 20,
   },
 
   // =====================================================
@@ -1253,6 +836,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
+  // =====================================================
+  // INPUTS
+  // =====================================================
+
   label: {
     fontSize: 14,
     fontWeight: '700',
@@ -1272,98 +859,31 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
 
-  descriptionInput: {
-    height: 100,
-    paddingTop: 13,
-  },
-
-  // =====================================================
-  // AVAILABILITY SELECTOR
-  // =====================================================
-
-  availabilitySelector: {
+  readOnlyInput: {
     borderWidth: 1,
-    borderRadius: 12,
-    padding: 12,
+    borderColor: '#e5e5e5',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    backgroundColor: '#f7f7f7',
+    marginBottom: 6,
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
+    justifyContent: 'space-between',
   },
 
-  availabilitySelectorOn: {
-    borderColor: '#bfe8c8',
-    backgroundColor: '#f4fcf6',
-  },
-
-  availabilitySelectorOff: {
-    borderColor: '#ddd',
-    backgroundColor: '#f8f8f8',
-  },
-
-  availabilityIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
+  readOnlyInputText: {
+    flex: 1,
+    fontSize: 15,
+    color: '#888',
     marginRight: 10,
   },
 
-  availabilityIconOn: {
-    backgroundColor: '#28a745',
-  },
-
-  availabilityIconOff: {
-    backgroundColor: '#999',
-  },
-
-  availabilityInfo: {
-    flex: 1,
-    paddingRight: 8,
-  },
-
-  availabilityTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#333',
-  },
-
-  availabilityDescription: {
+  emailNote: {
     fontSize: 11,
-    color: '#888',
-    marginTop: 2,
-    lineHeight: 15,
-  },
-
-  switchTrack: {
-    width: 46,
-    height: 26,
-    borderRadius: 13,
-    padding: 3,
-    justifyContent: 'center',
-  },
-
-  switchTrackOn: {
-    backgroundColor: '#d96b8a',
-  },
-
-  switchTrackOff: {
-    backgroundColor: '#ccc',
-  },
-
-  switchThumb: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#fff',
-  },
-
-  switchThumbOn: {
-    alignSelf: 'flex-end',
-  },
-
-  switchThumbOff: {
-    alignSelf: 'flex-start',
+    color: '#999',
+    lineHeight: 16,
+    marginBottom: 20,
   },
 
   // =====================================================
@@ -1403,4 +923,5 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
   },
+
 });

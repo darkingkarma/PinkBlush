@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from 'react';
 
 import {
@@ -17,7 +16,7 @@ import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 
 import { supabase } from '../../../supabase';
-import type { RootStackParamList } from '../../navigator';
+import type { RootStackParamList } from '../../../navigator';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Payment'>;
 
@@ -37,9 +36,14 @@ export default function PaymentScreen({ route, navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [checkingPayment, setCheckingPayment] = useState(false);
+
   const [pendingPaymentId, setPendingPaymentId] = useState<string | null>(
     null
   );
+
+  const [pendingPaypalOrderId, setPendingPaypalOrderId] = useState<
+    string | null
+  >(null);
 
   const formatPrice = (amount: number) =>
     `₱${amount.toLocaleString('en-PH', {
@@ -129,9 +133,10 @@ export default function PaymentScreen({ route, navigation }: Props) {
           .eq('payment_type', 'deposit')
           .eq('status', 'paid');
 
-        paidQuery = orderType === 'catalog'
-          ? paidQuery.eq('order_id', orderId)
-          : paidQuery.eq('custom_order_id', orderId);
+        paidQuery =
+          orderType === 'catalog'
+            ? paidQuery.eq('order_id', orderId)
+            : paidQuery.eq('custom_order_id', orderId);
 
         const { data: paidPayment, error: paidError } = await paidQuery
           .order('created_at', { ascending: false })
@@ -156,13 +161,14 @@ export default function PaymentScreen({ route, navigation }: Props) {
         // Find an existing pending deposit.
         let pendingQuery = supabase
           .from('payments')
-          .select('id')
+          .select('id, payment_method, transaction_id')
           .eq('payment_type', 'deposit')
           .eq('status', 'pending');
 
-        pendingQuery = orderType === 'catalog'
-          ? pendingQuery.eq('order_id', orderId)
-          : pendingQuery.eq('custom_order_id', orderId);
+        pendingQuery =
+          orderType === 'catalog'
+            ? pendingQuery.eq('order_id', orderId)
+            : pendingQuery.eq('custom_order_id', orderId);
 
         const { data: pendingPayment, error: pendingError } =
           await pendingQuery
@@ -176,6 +182,13 @@ export default function PaymentScreen({ route, navigation }: Props) {
 
         if (mounted && pendingPayment) {
           setPendingPaymentId(pendingPayment.id);
+
+          if (
+            pendingPayment.payment_method === 'paypal' &&
+            pendingPayment.transaction_id
+          ) {
+            setPendingPaypalOrderId(pendingPayment.transaction_id);
+          }
         }
       } catch (error) {
         const message =
@@ -204,7 +217,7 @@ export default function PaymentScreen({ route, navigation }: Props) {
   }, [orderId, orderType, navigation]);
 
   // =========================================
-  // VERIFY PAYMENT THROUGH DATABASE
+  // VERIFY GCASH PAYMENT THROUGH DATABASE
   // =========================================
 
   const verifyPayment = async (paymentId: string) => {
@@ -213,7 +226,6 @@ export default function PaymentScreen({ route, navigation }: Props) {
     setCheckingPayment(true);
 
     try {
-      // Allow the webhook time to process the payment.
       for (let attempt = 0; attempt < 10; attempt++) {
         const { data: payment, error } = await supabase
           .from('payments')
@@ -233,6 +245,7 @@ export default function PaymentScreen({ route, navigation }: Props) {
 
         if (payment.status === 'paid') {
           setPendingPaymentId(null);
+          setPendingPaypalOrderId(null);
 
           navigation.replace('Receipt', {
             orderId,
@@ -245,6 +258,7 @@ export default function PaymentScreen({ route, navigation }: Props) {
 
         if (payment.status === 'failed') {
           setPendingPaymentId(null);
+          setPendingPaypalOrderId(null);
 
           Alert.alert(
             'Payment Failed',
@@ -261,7 +275,6 @@ export default function PaymentScreen({ route, navigation }: Props) {
         await wait(2000);
       }
 
-      // Keep the payment reference so the customer can check again.
       setPendingPaymentId(paymentId);
 
       Alert.alert(
@@ -287,6 +300,51 @@ export default function PaymentScreen({ route, navigation }: Props) {
   const handleCheckPayment = async () => {
     if (!pendingPaymentId || checkingPayment || processing) return;
 
+    // PayPal pending payment: attempt secure server-side capture.
+    if (pendingPaypalOrderId) {
+      setProcessing(true);
+
+      try {
+        const { data, error } =
+          await supabase.functions.invoke('capture-paypal-order', {
+            body: {
+              paypalOrderId: pendingPaypalOrderId,
+            },
+          });
+
+        if (error || !data?.success) {
+          throw new Error(
+            data?.error ||
+              error?.message ||
+              'PayPal has not confirmed your payment yet.'
+          );
+        }
+
+        const paymentId = pendingPaymentId;
+
+        setPendingPaymentId(null);
+        setPendingPaypalOrderId(null);
+
+        navigation.replace('Receipt', {
+          orderId,
+          paymentId,
+          orderType,
+        });
+      } catch (error) {
+        Alert.alert(
+          'PayPal Verification',
+          error instanceof Error
+            ? error.message
+            : 'Unable to verify PayPal payment.'
+        );
+      } finally {
+        setProcessing(false);
+      }
+
+      return;
+    }
+
+    // GCash pending payment: check database/webhook status.
     await verifyPayment(pendingPaymentId);
   };
 
@@ -297,7 +355,6 @@ export default function PaymentScreen({ route, navigation }: Props) {
   const handleGCashPayment = () => {
     if (processing || checkingPayment || !summary) return;
 
-    // Never create another checkout while one is pending.
     if (pendingPaymentId) {
       void handleCheckPayment();
       return;
@@ -318,6 +375,7 @@ export default function PaymentScreen({ route, navigation }: Props) {
 
             try {
               const appReturnUrl = Linking.createURL('payment-return');
+              console.log('GCASH APP RETURN URL:', appReturnUrl);
 
               const { data, error } =
                 await supabase.functions.invoke(
@@ -330,6 +388,7 @@ export default function PaymentScreen({ route, navigation }: Props) {
                     },
                   }
                 );
+                
 
               if (error) {
                 throw new Error(
@@ -346,17 +405,14 @@ export default function PaymentScreen({ route, navigation }: Props) {
                 );
               }
 
-              // Save the payment reference immediately.
               setPendingPaymentId(data.paymentId);
+              setPendingPaypalOrderId(null);
 
-              // Open PayMongo checkout.
               await WebBrowser.openAuthSessionAsync(
                 data.checkoutUrl,
                 appReturnUrl
               );
 
-              // A browser return does not prove payment.
-              // The database status is the source of truth.
               await verifyPayment(data.paymentId);
             } catch (error) {
               Alert.alert(
@@ -375,6 +431,151 @@ export default function PaymentScreen({ route, navigation }: Props) {
   };
 
   // =========================================
+  // START PAYPAL CHECKOUT
+  // =========================================
+
+  const handlePayPalPayment = () => {
+    if (processing || checkingPayment || !summary) return;
+
+    if (pendingPaymentId) {
+      void handleCheckPayment();
+      return;
+    }
+
+    Alert.alert(
+      'Confirm Deposit',
+      `Continue to pay ${formatPrice(summary.deposit)} through PayPal?`,
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Continue',
+          onPress: async () => {
+            setProcessing(true);
+
+            try {
+              const { data, error } =
+                await supabase.functions.invoke(
+                  'create-paypal-order',
+                  {
+                    body: {
+                      orderId,
+                      orderType,
+                    },
+                  }
+                );
+
+              if (error) {
+                throw new Error(
+                  data?.error ||
+                    error.message ||
+                    'Unable to create PayPal checkout.'
+                );
+              }
+
+              if (
+                !data?.success ||
+                !data?.paymentId ||
+                !data?.paypalOrderId ||
+                !data?.approvalUrl
+              ) {
+                throw new Error(
+                  data?.error ||
+                    'PayPal checkout details were not returned.'
+                );
+              }
+
+              setPendingPaymentId(data.paymentId);
+              setPendingPaypalOrderId(data.paypalOrderId);
+
+              // Must match the app scheme used in create-paypal-order.
+              const appReturnUrl = 'pinkblush://payment';
+
+              const browserResult =
+                await WebBrowser.openAuthSessionAsync(
+                  data.approvalUrl,
+                  appReturnUrl
+                );
+
+              if (browserResult.type !== 'success') {
+                Alert.alert(
+                  'Checkout Not Completed',
+                  'PayPal checkout was closed. Your payment is still pending. Please check its status before attempting another payment.'
+                );
+                return;
+              }
+
+              const parsed = Linking.parse(browserResult.url);
+              const params = parsed.queryParams ?? {};
+
+              const returnedResult = params.result;
+              const returnedOrderId = params.orderId;
+
+              if (returnedResult !== 'success') {
+                Alert.alert(
+                  'Payment Cancelled',
+                  'You cancelled the PayPal checkout. Your payment has not been confirmed.'
+                );
+                return;
+              }
+
+              if (
+                typeof returnedOrderId !== 'string' ||
+                returnedOrderId !== data.paypalOrderId
+              ) {
+                throw new Error(
+                  'The returned PayPal order ID does not match the checkout.'
+                );
+              }
+
+              // Capture and verify payment on the server.
+              const {
+                data: captureData,
+                error: captureError,
+              } = await supabase.functions.invoke(
+                'capture-paypal-order',
+                {
+                  body: {
+                    paypalOrderId: returnedOrderId,
+                  },
+                }
+              );
+
+              if (captureError || !captureData?.success) {
+                throw new Error(
+                  captureData?.error ||
+                    captureError?.message ||
+                    'Unable to confirm PayPal payment.'
+                );
+              }
+
+              setPendingPaymentId(null);
+              setPendingPaypalOrderId(null);
+
+              navigation.replace('Receipt', {
+                orderId,
+                paymentId: data.paymentId,
+                orderType,
+              });
+            } catch (error) {
+              Alert.alert(
+                'PayPal Checkout Error',
+                error instanceof Error
+                  ? error.message
+                  : 'Something went wrong with PayPal.'
+              );
+            } finally {
+              setProcessing(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // =========================================
   // LOADING
   // =========================================
 
@@ -382,6 +583,7 @@ export default function PaymentScreen({ route, navigation }: Props) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#B84470" />
+
         <Text style={styles.loadingText}>
           Loading order details...
         </Text>
@@ -398,8 +600,7 @@ export default function PaymentScreen({ route, navigation }: Props) {
       style={styles.container}
       contentContainerStyle={styles.content}
       keyboardShouldPersistTaps="handled"
-    >   
-
+    >
       <View style={styles.header}>
         <View style={styles.headerIcon}>
           <Ionicons name="wallet-outline" size={30} color="#B84470" />
@@ -479,7 +680,13 @@ export default function PaymentScreen({ route, navigation }: Props) {
 
       <Text style={styles.sectionTitle}>Payment Method</Text>
 
-      <View style={[styles.methodCard, styles.selectedMethod]}>
+      {/* GCASH */}
+      <TouchableOpacity
+        style={styles.methodCard}
+        activeOpacity={0.85}
+        onPress={handleGCashPayment}
+        disabled={processing || checkingPayment}
+      >
         <View style={[styles.methodIcon, styles.gcashIcon]}>
           <Ionicons
             name="phone-portrait-outline"
@@ -497,47 +704,70 @@ export default function PaymentScreen({ route, navigation }: Props) {
         </View>
 
         <Ionicons
-          name="checkmark-circle"
-          size={23}
+          name="chevron-forward"
+          size={22}
           color="#B84470"
         />
-      </View>
-
-      <TouchableOpacity
-        style={[
-          styles.payButton,
-          (processing || checkingPayment) && styles.disabledButton,
-        ]}
-        onPress={
-          pendingPaymentId
-            ? handleCheckPayment
-            : handleGCashPayment
-        }
-        disabled={processing || checkingPayment}
-        activeOpacity={0.85}
-      >
-        {processing || checkingPayment ? (
-          <ActivityIndicator color="#FFFFFF" />
-        ) : (
-          <>
-            <Ionicons
-              name={
-                pendingPaymentId
-                  ? 'refresh-circle-outline'
-                  : 'shield-checkmark-outline'
-              }
-              size={21}
-              color="#FFFFFF"
-            />
-
-            <Text style={styles.payButtonText}>
-              {pendingPaymentId
-                ? 'Check Payment Status'
-                : 'Continue to GCash'}
-            </Text>
-          </>
-        )}
       </TouchableOpacity>
+
+      {/* PAYPAL */}
+      <TouchableOpacity
+        style={styles.methodCard}
+        activeOpacity={0.85}
+        onPress={handlePayPalPayment}
+        disabled={processing || checkingPayment}
+      >
+        <View style={[styles.methodIcon, styles.paypalIcon]}>
+          <Ionicons
+            name="logo-paypal"
+            size={26}
+            color="#FFFFFF"
+          />
+        </View>
+
+        <View style={styles.methodInfo}>
+          <Text style={styles.methodName}>PayPal</Text>
+
+          <Text style={styles.methodDescription}>
+            Pay securely using your PayPal account.
+          </Text>
+        </View>
+
+        <Ionicons
+          name="chevron-forward"
+          size={22}
+          color="#B84470"
+        />
+      </TouchableOpacity>
+
+      {/* CHECK PENDING PAYMENT */}
+      {pendingPaymentId && (
+        <TouchableOpacity
+          style={[
+            styles.payButton,
+            (processing || checkingPayment) && styles.disabledButton,
+          ]}
+          onPress={handleCheckPayment}
+          disabled={processing || checkingPayment}
+          activeOpacity={0.85}
+        >
+          {processing || checkingPayment ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <>
+              <Ionicons
+                name="refresh-circle-outline"
+                size={21}
+                color="#FFFFFF"
+              />
+
+              <Text style={styles.payButtonText}>
+                Check Payment Status
+              </Text>
+            </>
+          )}
+        </TouchableOpacity>
+      )}
 
       {(processing || checkingPayment) && (
         <View style={styles.checkingContainer}>
@@ -545,15 +775,15 @@ export default function PaymentScreen({ route, navigation }: Props) {
 
           <Text style={styles.checkingText}>
             {processing
-              ? 'Opening secure checkout...'
+              ? 'Processing payment...'
               : 'Verifying your payment...'}
           </Text>
         </View>
       )}
 
       <Text style={styles.footerNote}>
-        Your payment will only be recorded as paid after PayMongo
-        confirms it through the payment notification system.
+        Your payment will only be recorded as paid after the payment
+        provider confirms the transaction.
       </Text>
     </ScrollView>
   );
@@ -585,21 +815,6 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 14,
     color: '#816875',
-  },
-
-  backButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    paddingVertical: 8,
-    marginBottom: 12,
-  },
-
-  backText: {
-    marginLeft: 6,
-    color: '#B84470',
-    fontSize: 15,
-    fontWeight: '600',
   },
 
   header: {
@@ -750,11 +965,6 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
 
-  selectedMethod: {
-    borderColor: '#B84470',
-    backgroundColor: '#FFF0F5',
-  },
-
   methodIcon: {
     width: 46,
     height: 46,
@@ -765,6 +975,10 @@ const styles = StyleSheet.create({
 
   gcashIcon: {
     backgroundColor: '#007DFE',
+  },
+
+  paypalIcon: {
+    backgroundColor: '#003087',
   },
 
   methodInfo: {

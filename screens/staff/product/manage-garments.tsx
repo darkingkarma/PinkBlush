@@ -15,14 +15,13 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import * as ImagePicker from 'expo-image-picker';
 import { decode } from 'base64-arraybuffer';
 
 import { supabase } from '../../../supabase';
-import { RootStackParamList } from '../../navigator';
+import { RootStackParamList } from '../../../navigator';
 
 type Props = NativeStackScreenProps<
   RootStackParamList,
@@ -72,32 +71,41 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
   const loadGarments = useCallback(async () => {
     setLoading(true);
 
-    const { data, error } = await supabase
-      .from('garments')
-      .select('*')
-      .order('created_at', { ascending: false });
+    try {
+      const { data, error } = await supabase
+        .from('garments')
+        .select('*')
+        .order('created_at', { ascending: false });
 
-    if (error) {
-      Alert.alert('Unable to Load Garments', error.message);
-    } else {
+      if (error) throw error;
+
       setGarments((data ?? []) as Garment[]);
+    } catch (error: any) {
+      Alert.alert(
+        'Unable to Load Garments',
+        error.message || 'Something went wrong.',
+      );
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   }, []);
 
   const loadCategories = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('garment_categories')
-      .select('id, name')
-      .order('name', { ascending: true });
+    try {
+      const { data, error } = await supabase
+        .from('garment_categories')
+        .select('id, name')
+        .order('name', { ascending: true });
 
-    if (error) {
-      Alert.alert('Unable to Load Categories', error.message);
-      return;
+      if (error) throw error;
+
+      setCategories((data ?? []) as Category[]);
+    } catch (error: any) {
+      Alert.alert(
+        'Unable to Load Categories',
+        error.message || 'Something went wrong.',
+      );
     }
-
-    setCategories((data ?? []) as Category[]);
   }, []);
 
   useFocusEffect(
@@ -294,15 +302,13 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
           await removeStorageImage(editingGarment.image_url);
         }
 
-        setGarments((current) => [
-          {
-            ...editingGarment,
-            ...garmentData,
-          },
-          ...current.filter(
-            (item) => item.id !== editingGarment.id,
+        setGarments((current) =>
+          current.map((item) =>
+            item.id === editingGarment.id
+              ? { ...item, ...garmentData }
+              : item,
           ),
-        ]);
+        );
 
         setModalVisible(false);
         resetForm();
@@ -443,9 +449,6 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
             onPress={() => navigation.navigate('GarmentCategories')}
             activeOpacity={0.8}
           >
-            <View style={styles.shortcutIcon}>
-              <Ionicons name="grid-outline" size={25} color="#d96b8a" />
-            </View>
             <Text style={styles.shortcutTitle}>Categories</Text>
             <Text style={styles.shortcutDescription}>
               Manage garment categories
@@ -458,13 +461,6 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
             onPress={() => navigation.navigate('Fabrics')}
             activeOpacity={0.8}
           >
-            <View style={styles.shortcutIcon}>
-              <Ionicons
-                name="color-palette-outline"
-                size={25}
-                color="#d96b8a"
-              />
-            </View>
             <Text style={styles.shortcutTitle}>Fabrics</Text>
             <Text style={styles.shortcutDescription}>
               Manage available fabrics
@@ -486,13 +482,11 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
             onPress={openAddModal}
             activeOpacity={0.8}
           >
-            <Ionicons name="add" size={20} color="#fff" />
-            <Text style={styles.addButtonText}>Add Garment</Text>
+            <Text style={styles.addButtonText}>+ Add Garment</Text>
           </TouchableOpacity>
         </View>
 
         <View style={styles.searchContainer}>
-          <Ionicons name="search-outline" size={20} color="#999" />
           <TextInput
             style={styles.searchInput}
             placeholder="Search garments or categories..."
@@ -501,9 +495,10 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
             onChangeText={setSearch}
             autoCapitalize="none"
           />
+
           {search.length > 0 && (
             <TouchableOpacity onPress={() => setSearch('')}>
-              <Ionicons name="close-circle" size={19} color="#aaa" />
+              <Text style={styles.clearSearchText}>×</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -516,9 +511,6 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
           />
         ) : filteredGarments.length === 0 ? (
           <View style={styles.emptyState}>
-            <View style={styles.emptyIcon}>
-              <Ionicons name="shirt-outline" size={38} color="#d96b8a" />
-            </View>
             <Text style={styles.emptyTitle}>No garments found</Text>
             <Text style={styles.emptyText}>
               {search.trim()
@@ -531,8 +523,7 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
                 style={styles.emptyAddButton}
                 onPress={openAddModal}
               >
-                <Ionicons name="add" size={18} color="#fff" />
-                <Text style={styles.emptyAddText}>Add Garment</Text>
+                <Text style={styles.emptyAddText}>+ Add Garment</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -544,7 +535,7 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
                   <Image
                     source={{ uri: item.image_url }}
                     style={styles.garmentImage}
-                    resizeMode="cover"
+                    resizeMode="contain"
                   />
                 ) : (
                   <View
@@ -553,11 +544,7 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
                       styles.imagePlaceholder,
                     ]}
                   >
-                    <Ionicons
-                      name="shirt-outline"
-                      size={32}
-                      color="#d96b8a"
-                    />
+                    <Text style={styles.noImageText}>No Image</Text>
                   </View>
                 )}
 
@@ -618,7 +605,6 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
                     })
                   }
                 >
-                  <Ionicons name="settings-outline" size={16} color="#fff" />
                   <Text style={styles.manageButtonText}>Manage</Text>
                 </TouchableOpacity>
 
@@ -626,11 +612,6 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
                   style={[styles.actionButton, styles.editButton]}
                   onPress={() => openEditModal(item)}
                 >
-                  <Ionicons
-                    name="create-outline"
-                    size={16}
-                    color="#d96b8a"
-                  />
                   <Text style={styles.editButtonText}>Edit</Text>
                 </TouchableOpacity>
 
@@ -643,11 +624,6 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
                   ]}
                   onPress={() => toggleAvailability(item)}
                 >
-                  <Ionicons
-                    name={item.available ? 'eye-off-outline' : 'eye-outline'}
-                    size={16}
-                    color={item.available ? '#9a6b13' : '#24834c'}
-                  />
                   <Text
                     style={[
                       styles.availabilityButtonText,
@@ -664,11 +640,6 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
                   style={[styles.actionButton, styles.deleteButton]}
                   onPress={() => deleteGarment(item)}
                 >
-                  <Ionicons
-                    name="trash-outline"
-                    size={16}
-                    color="#d9534f"
-                  />
                   <Text style={styles.deleteButtonText}>Delete</Text>
                 </TouchableOpacity>
               </View>
@@ -712,7 +683,7 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
                 onPress={closeModal}
                 disabled={saving}
               >
-                <Ionicons name="close" size={23} color="#66545b" />
+                <Text style={styles.closeText}>×</Text>
               </TouchableOpacity>
             </View>
 
@@ -734,17 +705,10 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
                   <Image
                     source={{ uri: image }}
                     style={styles.previewImage}
-                    resizeMode="cover"
+                    resizeMode="contain"
                   />
                 ) : (
                   <View style={styles.imagePickerPlaceholder}>
-                    <View style={styles.imagePickerIcon}>
-                      <Ionicons
-                        name="image-outline"
-                        size={30}
-                        color="#d96b8a"
-                      />
-                    </View>
                     <Text style={styles.imagePickerTitle}>
                       Select garment image
                     </Text>
@@ -753,10 +717,6 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
                     </Text>
                   </View>
                 )}
-
-                <View style={styles.cameraBadge}>
-                  <Ionicons name="camera-outline" size={18} color="#fff" />
-                </View>
               </TouchableOpacity>
 
               {image && (
@@ -764,11 +724,6 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
                   onPress={pickImage}
                   style={styles.changeImageButton}
                 >
-                  <Ionicons
-                    name="image-outline"
-                    size={16}
-                    color="#d96b8a"
-                  />
                   <Text style={styles.changeImageText}>Change Image</Text>
                 </TouchableOpacity>
               )}
@@ -783,7 +738,6 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
                 maxLength={100}
               />
 
-              {/* Category Dropdown */}
               <Text style={styles.label}>Category *</Text>
 
               <TouchableOpacity
@@ -809,13 +763,9 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
                   )?.name ?? 'Select a category'}
                 </Text>
 
-                <Ionicons
-                  name={
-                    categoryDropdownVisible ? 'chevron-up' : 'chevron-down'
-                  }
-                  size={20}
-                  color="#d96b8a"
-                />
+                <Text style={styles.dropdownArrow}>
+                  {categoryDropdownVisible ? '▲' : '▼'}
+                </Text>
               </TouchableOpacity>
 
               {categoryDropdownVisible && categories.length > 0 && (
@@ -855,11 +805,7 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
                           </Text>
 
                           {selected && (
-                            <Ionicons
-                              name="checkmark-circle"
-                              size={19}
-                              color="#d96b8a"
-                            />
+                            <Text style={styles.selectedCheck}>✓</Text>
                           )}
                         </TouchableOpacity>
                       );
@@ -870,11 +816,6 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
 
               {categories.length === 0 && (
                 <View style={styles.noCategories}>
-                  <Ionicons
-                    name="information-circle-outline"
-                    size={20}
-                    color="#b16a80"
-                  />
                   <Text style={styles.noCategoriesText}>
                     No categories found. Create a category first.
                   </Text>
@@ -903,11 +844,6 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
                   ]}
                   onPress={() => setAvailable(true)}
                 >
-                  <Ionicons
-                    name="checkmark-circle-outline"
-                    size={19}
-                    color={available ? '#24834c' : '#999'}
-                  />
                   <Text
                     style={[
                       styles.availabilityOptionText,
@@ -925,11 +861,6 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
                   ]}
                   onPress={() => setAvailable(false)}
                 >
-                  <Ionicons
-                    name="close-circle-outline"
-                    size={19}
-                    color={!available ? '#d9534f' : '#999'}
-                  />
                   <Text
                     style={[
                       styles.availabilityOptionText,
@@ -953,23 +884,14 @@ export default function ManageGarmentsScreen({ navigation }: Props) {
                 {saving ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
-                  <Ionicons
-                    name={
-                      editingGarment
-                        ? 'checkmark-circle-outline'
-                        : 'add-circle-outline'
-                    }
-                    size={20}
-                    color="#fff"
-                  />
+                  <Text style={styles.saveButtonText}>
+                    {editingGarment ? 'Save Changes' : 'Add Garment'}
+                  </Text>
                 )}
-                <Text style={styles.saveButtonText}>
-                  {saving
-                    ? 'Saving...'
-                    : editingGarment
-                      ? 'Save Changes'
-                      : 'Add Garment'}
-                </Text>
+
+                {saving && (
+                  <Text style={styles.saveButtonText}>Saving...</Text>
+                )}
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1021,19 +943,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#f1dce3',
   },
-  shortcutIcon: {
-    width: 45,
-    height: 45,
-    borderRadius: 14,
-    backgroundColor: '#fff0f5',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   shortcutTitle: {
     color: '#30242a',
     fontSize: 15,
     fontWeight: '800',
-    marginTop: 10,
   },
   shortcutDescription: {
     color: '#777',
@@ -1064,10 +977,8 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
   addButton: {
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
     backgroundColor: '#d96b8a',
     paddingHorizontal: 13,
     paddingVertical: 11,
@@ -1095,6 +1006,11 @@ const styles = StyleSheet.create({
     color: '#30242a',
     fontSize: 14,
   },
+  clearSearchText: {
+    fontSize: 24,
+    color: '#999',
+    paddingHorizontal: 5,
+  },
   emptyState: {
     backgroundColor: '#fff',
     padding: 28,
@@ -1103,19 +1019,10 @@ const styles = StyleSheet.create({
     borderColor: '#f1dce3',
     alignItems: 'center',
   },
-  emptyIcon: {
-    width: 68,
-    height: 68,
-    borderRadius: 22,
-    backgroundColor: '#fff0f5',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   emptyTitle: {
     color: '#30242a',
     fontSize: 16,
     fontWeight: '800',
-    marginTop: 12,
   },
   emptyText: {
     color: '#888',
@@ -1125,9 +1032,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   emptyAddButton: {
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
     marginTop: 16,
     backgroundColor: '#d96b8a',
     paddingHorizontal: 16,
@@ -1152,14 +1057,20 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   garmentImage: {
-    width: 94,
-    height: 108,
+    width: 110,
+    height: 130,
     borderRadius: 12,
-    backgroundColor: '#fff0f5',
+    backgroundColor: '#fff',
   },
   imagePlaceholder: {
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: '#fff0f5',
+  },
+  noImageText: {
+    color: '#d96b8a',
+    fontSize: 12,
+    fontWeight: '600',
   },
   garmentInfo: {
     flex: 1,
@@ -1216,10 +1127,8 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     flexBasis: 75,
     minHeight: 39,
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 5,
     borderRadius: 9,
     paddingHorizontal: 8,
     paddingVertical: 9,
@@ -1303,6 +1212,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginLeft: 10,
   },
+  closeText: {
+    fontSize: 25,
+    color: '#66545b',
+    fontWeight: '500',
+  },
   modalScroll: {
     flexShrink: 1,
   },
@@ -1319,13 +1233,13 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   imagePicker: {
-    height: 155,
+    height: 220,
     borderWidth: 1,
     borderColor: '#edcbd7',
     borderStyle: 'dashed',
     borderRadius: 15,
     overflow: 'hidden',
-    backgroundColor: '#fff8fa',
+    backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1338,15 +1252,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 15,
   },
-  imagePickerIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: 17,
-    backgroundColor: '#fce7ef',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 9,
-  },
   imagePickerTitle: {
     color: '#55434b',
     fontSize: 13,
@@ -1357,22 +1262,9 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 4,
   },
-  cameraBadge: {
-    position: 'absolute',
-    right: 10,
-    bottom: 10,
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: '#d96b8a',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   changeImageButton: {
     alignSelf: 'center',
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
     marginTop: 9,
     padding: 4,
   },
@@ -1395,8 +1287,6 @@ const styles = StyleSheet.create({
     minHeight: 90,
     textAlignVertical: 'top',
   },
-
-  // Category dropdown styles
   categoryDropdown: {
     minHeight: 48,
     flexDirection: 'row',
@@ -1423,6 +1313,10 @@ const styles = StyleSheet.create({
   categoryPlaceholder: {
     color: '#aaa',
     fontWeight: '400',
+  },
+  dropdownArrow: {
+    color: '#d96b8a',
+    fontSize: 12,
   },
   categoryDropdownMenu: {
     borderWidth: 1,
@@ -1459,17 +1353,18 @@ const styles = StyleSheet.create({
     color: '#d96b8a',
     fontWeight: '800',
   },
+  selectedCheck: {
+    color: '#d96b8a',
+    fontSize: 18,
+    fontWeight: '800',
+  },
   noCategories: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
     padding: 12,
     borderRadius: 10,
     backgroundColor: '#fff5f8',
     marginTop: 8,
   },
   noCategoriesText: {
-    flex: 1,
     color: '#9a596d',
     fontSize: 12,
     lineHeight: 18,
@@ -1480,10 +1375,8 @@ const styles = StyleSheet.create({
   },
   availabilityOption: {
     flex: 1,
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
     paddingHorizontal: 8,
     paddingVertical: 12,
     borderWidth: 1,
@@ -1511,10 +1404,8 @@ const styles = StyleSheet.create({
     color: '#d9534f',
   },
   saveButton: {
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
     backgroundColor: '#d96b8a',
     borderRadius: 12,
     paddingVertical: 15,

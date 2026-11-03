@@ -1,5 +1,5 @@
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -12,7 +12,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { supabase } from '../../../supabase';
-import { RootStackParamList } from '../../navigator';
+import { RootStackParamList } from '../../../navigator';
 
 type Props = NativeStackScreenProps<
   RootStackParamList,
@@ -44,16 +44,34 @@ export default function ReviewQuotationScreen({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const fetchQuotation = async () => {
-    setLoading(true);
+  const isMounted = useRef(true);
+
+  useEffect(() => {
+    isMounted.current = true;
+
+    return () => {
+      isMounted.current = false;
+    };
+  }, []);
+
+  const fetchQuotation = useCallback(async () => {
+    if (isMounted.current) {
+      setLoading(true);
+    }
 
     try {
-      const { data: userData, error: userError } =
-        await supabase.auth.getUser();
+      const {
+        data: userData,
+        error: userError,
+      } = await supabase.auth.getUser();
 
-      if (userError || !userData.user) {
-        Alert.alert('Session expired', 'Please log in again.');
-        navigation.goBack();
+      if (userError) throw userError;
+
+      if (!userData.user) {
+        if (isMounted.current) {
+          Alert.alert('Session expired', 'Please log in again.');
+          navigation.goBack();
+        }
         return;
       }
 
@@ -69,29 +87,43 @@ export default function ReviewQuotationScreen({
       if (error) throw error;
 
       if (!data) {
-        Alert.alert('Not found', 'This order could not be found.');
-        navigation.goBack();
+        if (isMounted.current) {
+          Alert.alert('Not found', 'This order could not be found.');
+          navigation.goBack();
+        }
         return;
       }
 
-      setOrder(data as CustomOrder);
-    } catch (error: any) {
-      Alert.alert(
-        'Error',
-        error?.message || 'Unable to load the quotation.'
-      );
+      if (isMounted.current) {
+        setOrder(data as CustomOrder);
+      }
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Unable to load the quotation.';
+
+      if (isMounted.current) {
+        Alert.alert('Error', message);
+      }
     } finally {
-      setLoading(false);
+      if (isMounted.current) {
+        setLoading(false);
+      }
     }
-  };
+  }, [orderId, navigation]);
 
   useEffect(() => {
-    fetchQuotation();
-  }, [orderId]);
+    void fetchQuotation();
+  }, [fetchQuotation]);
 
   const quotedPrice = Number(order?.quoted_price ?? 0);
   const depositAmount = Number(order?.deposit_amount ?? 0);
-  const remainingBalance = Math.max(0, quotedPrice - depositAmount);
+
+  const remainingBalance = Math.max(
+    0,
+    quotedPrice - depositAmount
+  );
 
   const formatPrice = (amount: number) =>
     `₱${amount.toLocaleString('en-PH', {
@@ -104,7 +136,9 @@ export default function ReviewQuotationScreen({
 
     const parsedDate = new Date(`${date.slice(0, 10)}T00:00:00`);
 
-    if (Number.isNaN(parsedDate.getTime())) return 'Not specified';
+    if (Number.isNaN(parsedDate.getTime())) {
+      return 'Not specified';
+    }
 
     return parsedDate.toLocaleDateString('en-PH', {
       month: 'long',
@@ -113,17 +147,23 @@ export default function ReviewQuotationScreen({
     });
   };
 
-  const respondToQuotation = (decision: 'accepted' | 'declined') => {
+  const respondToQuotation = (
+    decision: 'accepted' | 'declined'
+  ) => {
     if (!order || saving) return;
+
+    const validQuotation =
+      order.quoted_price !== null &&
+      order.deposit_amount !== null &&
+      Number.isFinite(quotedPrice) &&
+      quotedPrice > 0 &&
+      Number.isFinite(depositAmount) &&
+      depositAmount >= 0 &&
+      depositAmount <= quotedPrice;
 
     if (
       !['quoted', 'quotation_sent'].includes(order.status) ||
-      order.quoted_price === null ||
-      !Number.isFinite(quotedPrice) ||
-      quotedPrice <= 0 ||
-      !Number.isFinite(depositAmount) ||
-      depositAmount < 0 ||
-      depositAmount > quotedPrice
+      !validQuotation
     ) {
       Alert.alert(
         'Quotation unavailable',
@@ -137,21 +177,34 @@ export default function ReviewQuotationScreen({
     Alert.alert(
       isAccepting ? 'Accept Quotation?' : 'Decline Quotation?',
       isAccepting
-        ? 'Do you agree to the quoted price and terms? You will proceed to deposit payment after accepting.'
+        ? `Do you agree to the quoted price of ${formatPrice(
+            quotedPrice
+          )} and the required deposit of ${formatPrice(
+            depositAmount
+          )}? You will proceed to deposit payment after accepting.`
         : 'Are you sure you want to decline this quotation?',
       [
-        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
         {
           text: isAccepting ? 'Accept' : 'Decline',
           style: isAccepting ? 'default' : 'destructive',
           onPress: async () => {
+            if (saving) return;
+
             setSaving(true);
 
             try {
-              const { data: userData, error: userError } =
-                await supabase.auth.getUser();
+              const {
+                data: userData,
+                error: userError,
+              } = await supabase.auth.getUser();
 
-              if (userError || !userData.user) {
+              if (userError) throw userError;
+
+              if (!userData.user) {
                 throw new Error('Please log in again.');
               }
 
@@ -168,27 +221,34 @@ export default function ReviewQuotationScreen({
 
               if (!data) {
                 Alert.alert(
-                  'Quotation updated',
-                  'This quotation may already have been responded to. Please refresh your orders.'
+                  'Quotation already updated',
+                  'This quotation may already have been responded to. Your order details will be refreshed.'
                 );
+
                 await fetchQuotation();
                 return;
               }
 
-              setOrder({ ...order, status: decision });
+              if (!isMounted.current) return;
+
+              setOrder((currentOrder) =>
+                currentOrder
+                  ? { ...currentOrder, status: decision }
+                  : currentOrder
+              );
 
               if (isAccepting) {
                 navigation.replace('Payment', {
                   orderId: order.id,
                   orderType: 'custom',
-                  totalAmount: quotedPrice,
+                  totalAmount: depositAmount,
                 });
                 return;
               }
 
               Alert.alert(
                 'Quotation Declined',
-                'You declined the quotation.',
+                'You have declined the quotation.',
                 [
                   {
                     text: 'OK',
@@ -196,14 +256,19 @@ export default function ReviewQuotationScreen({
                   },
                 ]
               );
-            } catch (error: any) {
-              Alert.alert(
-                'Unable to update',
-                error?.message ||
-                  'Something went wrong. Please try again.'
-              );
+            } catch (error: unknown) {
+              const message =
+                error instanceof Error
+                  ? error.message
+                  : 'Something went wrong. Please try again.';
+
+              if (isMounted.current) {
+                Alert.alert('Unable to update', message);
+              }
             } finally {
-              setSaving(false);
+              if (isMounted.current) {
+                setSaving(false);
+              }
             }
           },
         },
@@ -215,7 +280,9 @@ export default function ReviewQuotationScreen({
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color={PINK} />
-        <Text style={styles.loadingText}>Loading quotation...</Text>
+        <Text style={styles.loadingText}>
+          Loading quotation...
+        </Text>
       </View>
     );
   }
@@ -223,21 +290,32 @@ export default function ReviewQuotationScreen({
   if (!order) {
     return (
       <View style={styles.center}>
-        <Ionicons name="document-text-outline" size={48} color={PINK} />
-        <Text style={styles.emptyTitle}>Quotation unavailable</Text>
+        <Ionicons
+          name="document-text-outline"
+          size={48}
+          color={PINK}
+        />
+
+        <Text style={styles.emptyTitle}>
+          Quotation unavailable
+        </Text>
+
         <TouchableOpacity
           style={styles.primaryButton}
           onPress={() => navigation.goBack()}
         >
-          <Text style={styles.primaryButtonText}>Go Back</Text>
+          <Text style={styles.primaryButtonText}>
+            Go Back
+          </Text>
         </TouchableOpacity>
       </View>
     );
   }
 
-  const quotationIsOpen = ['quoted', 'quotation_sent'].includes(
-    order.status
-  );
+  const quotationIsOpen = [
+    'quoted',
+    'quotation_sent',
+  ].includes(order.status);
 
   return (
     <ScrollView
@@ -246,45 +324,73 @@ export default function ReviewQuotationScreen({
     >
       <View style={styles.header}>
         <View style={styles.headerIcon}>
-          <Ionicons name="document-text" size={30} color={PINK} />
+          <Ionicons
+            name="document-text"
+            size={30}
+            color={PINK}
+          />
         </View>
-        <Text style={styles.title}>Review Quotation</Text>
+
+        <Text style={styles.title}>
+          Review Quotation
+        </Text>
+
         <Text style={styles.subtitle}>
           Review your tailor's quotation before making a decision.
         </Text>
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Order Details</Text>
+        <Text style={styles.sectionTitle}>
+          Order Details
+        </Text>
 
-        <Text style={styles.label}>Garment / Request</Text>
+        <Text style={styles.label}>
+          Garment / Request
+        </Text>
+
         <Text style={styles.description}>
-          {order.garment_description || 'Custom garment request'}
+          {order.garment_description ||
+            'Custom garment request'}
         </Text>
 
         <View style={styles.divider} />
 
-        <Text style={styles.label}>Order submitted</Text>
+        <Text style={styles.label}>
+          Order submitted
+        </Text>
+
         <Text style={styles.value}>
           {formatDate(order.created_at)}
         </Text>
 
-        <Text style={styles.label}>Estimated completion date</Text>
+        <Text style={styles.label}>
+          Estimated completion date
+        </Text>
+
         <Text style={styles.value}>
           {formatDate(order.estimated_completion_date)}
         </Text>
       </View>
 
       <View style={styles.priceCard}>
-        <Text style={styles.priceHeading}>Quotation Summary</Text>
+        <Text style={styles.priceHeading}>
+          Quotation Summary
+        </Text>
 
-        <Text style={styles.label}>Total quoted price</Text>
+        <Text style={styles.label}>
+          Total quoted price
+        </Text>
+
         <Text style={styles.totalPrice}>
           {formatPrice(quotedPrice)}
         </Text>
 
         <View style={styles.priceRow}>
-          <Text style={styles.priceLabel}>Required deposit</Text>
+          <Text style={styles.priceLabel}>
+            Required deposit
+          </Text>
+
           <Text style={styles.priceValue}>
             {formatPrice(depositAmount)}
           </Text>
@@ -293,20 +399,27 @@ export default function ReviewQuotationScreen({
         <View style={styles.priceDivider} />
 
         <View style={styles.priceRow}>
-          <Text style={styles.balanceLabel}>Remaining balance</Text>
+          <Text style={styles.balanceLabel}>
+            Remaining balance
+          </Text>
+
           <Text style={styles.balanceValue}>
             {formatPrice(remainingBalance)}
           </Text>
         </View>
 
         <Text style={styles.paymentNote}>
-          The remaining balance is an estimate after the deposit.
-          No payment has been made by accepting this quotation.
+          Only the required deposit will be paid after accepting
+          this quotation. The remaining balance will still need
+          to be settled later.
         </Text>
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Tailor's Note</Text>
+        <Text style={styles.sectionTitle}>
+          Tailor's Note
+        </Text>
+
         <Text style={styles.noteText}>
           {order.quotation_note?.trim() ||
             'No additional note was provided by the tailor.'}
@@ -322,16 +435,25 @@ export default function ReviewQuotationScreen({
                 : 'information-circle'
             }
             size={25}
-            color={order.status === 'accepted' ? '#218838' : PINK}
+            color={
+              order.status === 'accepted'
+                ? '#218838'
+                : PINK
+            }
           />
+
           <View style={styles.statusContent}>
             <Text style={styles.statusTitle}>
               {order.status === 'accepted'
                 ? 'Quotation Accepted'
                 : order.status === 'declined'
                   ? 'Quotation Declined'
-                  : `Current status: ${order.status.replace(/_/g, ' ')}`}
+                  : `Current status: ${order.status.replace(
+                      /_/g,
+                      ' '
+                    )}`}
             </Text>
+
             <Text style={styles.statusMessage}>
               {order.status === 'accepted'
                 ? 'You have accepted this quotation. Check My Orders for the next steps.'
@@ -347,7 +469,8 @@ export default function ReviewQuotationScreen({
       {quotationIsOpen && (
         <View style={styles.actions}>
           <Text style={styles.decisionHint}>
-            Please review the price and terms before choosing an action.
+            Please review the price and terms before choosing
+            an action.
           </Text>
 
           <TouchableOpacity
@@ -356,17 +479,15 @@ export default function ReviewQuotationScreen({
               saving && styles.disabledButton,
             ]}
             disabled={saving}
-            onPress={() => respondToQuotation('accepted')}
+            onPress={() =>
+              respondToQuotation('accepted')
+            }
           >
             {saving ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
               <>
-                <Ionicons
-                  name="checkmark-circle-outline"
-                  size={21}
-                  color="#FFFFFF"
-                />
+
                 <Text style={styles.primaryButtonText}>
                   Accept Quotation
                 </Text>
@@ -380,13 +501,11 @@ export default function ReviewQuotationScreen({
               saving && styles.disabledButton,
             ]}
             disabled={saving}
-            onPress={() => respondToQuotation('declined')}
+            onPress={() =>
+              respondToQuotation('declined')
+            }
           >
-            <Ionicons
-              name="close-circle-outline"
-              size={21}
-              color={DARK_PINK}
-            />
+
             <Text style={styles.declineButtonText}>
               Decline Quotation
             </Text>

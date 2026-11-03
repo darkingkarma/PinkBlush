@@ -1,13 +1,14 @@
-
 import { useCallback, useState } from 'react';
 
 import {
+  ActivityIndicator,
   Alert,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
 
 import {
@@ -20,7 +21,7 @@ import {
 
 import {
   RootStackParamList,
-} from '../../navigator';
+} from '../../../navigator';
 
 import {
   supabase,
@@ -35,47 +36,64 @@ export default function OrderMeasurementsScreen({
   navigation,
   route,
 }: Props) {
+  const { width } = useWindowDimensions();
+
   const [measurements, setMeasurements] =
     useState<any>(null);
 
   const [loading, setLoading] =
     useState(true);
 
+  const [loadError, setLoadError] =
+    useState(false);
+
   const loadMeasurements = async () => {
     setLoading(true);
+    setLoadError(false);
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-    if (!user) {
-      Alert.alert(
-        'Error',
-        'You are not logged in.'
-      );
+      if (userError || !user) {
+        setMeasurements(null);
 
+        Alert.alert(
+          'Error',
+          'You are not logged in.'
+        );
+
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('measurements')
+        .select('*')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (error) {
+        console.error(
+          'Load measurements error:',
+          error
+        );
+
+        setMeasurements(null);
+        setLoadError(true);
+        return;
+      }
+
+      setMeasurements(data);
+    } catch (error) {
+      console.error(error);
+
+      setMeasurements(null);
+      setLoadError(true);
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const { data, error } = await supabase
-      .from('measurements')
-      .select('*')
-      .eq('user_id', user.id)
-      .maybeSingle();
-
-    if (error) {
-      Alert.alert(
-        'Error',
-        'Failed to load your measurements.'
-      );
-
-      setLoading(false);
-      return;
-    }
-
-    setMeasurements(data);
-    setLoading(false);
   };
 
   useFocusEffect(
@@ -87,7 +105,8 @@ export default function OrderMeasurementsScreen({
   const formatMeasurement = (value: any) => {
     if (
       value === null ||
-      value === undefined
+      value === undefined ||
+      value === ''
     ) {
       return '-';
     }
@@ -96,11 +115,64 @@ export default function OrderMeasurementsScreen({
   };
 
   const continueToReview = () => {
+    if (loading) return;
+
     if (!measurements) {
       Alert.alert(
         'Measurements Required',
-        'Please add your measurements before continuing.'
+        'Please add your measurements before continuing.',
+        [
+          {
+            text: 'Cancel',
+            style: 'cancel',
+          },
+          {
+            text: 'Add Measurements',
+            onPress: () =>
+              navigation.navigate('EditMeasurements'),
+          },
+        ]
       );
+
+      return;
+    }
+
+    const requiredMeasurements = [
+      measurements.shoulder,
+      measurements.chest,
+      measurements.waist,
+      measurements.sleeve_length,
+      measurements.top_length,
+      measurements.hips,
+      measurements.inseam,
+      measurements.bottom_length,
+    ];
+
+    const hasMissingMeasurements =
+      requiredMeasurements.some(
+        value =>
+          value === null ||
+          value === undefined ||
+          value === ''
+      );
+
+    if (hasMissingMeasurements) {
+      Alert.alert(
+        'Incomplete Measurements',
+        'Please complete all your measurements before continuing.',
+        [
+          {
+            text: 'Cancel',
+            style: 'cancel',
+          },
+          {
+            text: 'Edit Measurements',
+            onPress: () =>
+              navigation.navigate('EditMeasurements'),
+          },
+        ]
+      );
+
       return;
     }
 
@@ -142,91 +214,154 @@ export default function OrderMeasurementsScreen({
     );
   };
 
+  const isSmallScreen = width < 360;
+
   return (
     <View style={styles.container}>
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          {
+            paddingHorizontal: isSmallScreen ? 14 : 20,
+          },
+        ]}
       >
         <View style={styles.header}>
           <Text style={styles.title}>
             Order Measurements
           </Text>
-
-          <View style={styles.headerSpace} />
         </View>
 
         <Text style={styles.infoText}>
-          These measurements will be used for your order.
+          These measurements will be used to create your garment.
+          Make sure your measurements are accurate.
         </Text>
 
-        <Text style={styles.sectionTitle}>
-          Upper Body
-        </Text>
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator
+              size="large"
+              color="#e8558a"
+            />
 
-        <View style={styles.measurementCard}>
-          <MeasurementRow
-            title="Shoulder"
-            value={formatMeasurement(
-              measurements?.shoulder
-            )}
-          />
+            <Text style={styles.loadingText}>
+              Loading your measurements...
+            </Text>
+          </View>
+        ) : loadError ? (
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyTitle}>
+              Unable to Load Measurements
+            </Text>
 
-          <MeasurementRow
-            title="Chest / Bust"
-            value={formatMeasurement(
-              measurements?.chest
-            )}
-          />
+            <Text style={styles.emptyText}>
+              Please check your internet connection and try again.
+            </Text>
 
-          <MeasurementRow
-            title="Waist"
-            value={formatMeasurement(
-              measurements?.waist
-            )}
-          />
+            <TouchableOpacity
+              style={styles.retryButton}
+              onPress={loadMeasurements}
+            >
+              <Text style={styles.retryButtonText}>
+                TRY AGAIN
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : !measurements ? (
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyTitle}>
+              No Measurements Found
+            </Text>
 
-          <MeasurementRow
-            title="Sleeve Length"
-            value={formatMeasurement(
-              measurements?.sleeve_length
-            )}
-          />
+            <Text style={styles.emptyText}>
+              You need to save your body measurements before placing an order.
+            </Text>
 
-          <MeasurementRow
-            title="Top Length"
-            value={formatMeasurement(
-              measurements?.top_length
-            )}
-          />
-        </View>
+            <TouchableOpacity
+              style={styles.retryButton}
+              onPress={() =>
+                navigation.navigate('EditMeasurements')
+              }
+            >
+              <Text style={styles.retryButtonText}>
+                ADD MEASUREMENTS
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <>
+            <Text style={styles.sectionTitle}>
+              Upper Body
+            </Text>
 
-        <Text style={styles.sectionTitle}>
-          Lower Body
-        </Text>
+            <View style={styles.measurementCard}>
+              <MeasurementRow
+                title="Shoulder"
+                value={formatMeasurement(
+                  measurements.shoulder
+                )}
+              />
 
-        <View style={styles.measurementCard}>
-          <MeasurementRow
-            title="Hips"
-            value={formatMeasurement(
-              measurements?.hips
-            )}
-          />
+              <MeasurementRow
+                title="Chest / Bust"
+                value={formatMeasurement(
+                  measurements.chest
+                )}
+              />
 
-          <MeasurementRow
-            title="Inseam"
-            value={formatMeasurement(
-              measurements?.inseam
-            )}
-          />
+              <MeasurementRow
+                title="Waist"
+                value={formatMeasurement(
+                  measurements.waist
+                )}
+              />
 
-          <MeasurementRow
-            title="Bottom Length"
-            value={formatMeasurement(
-              measurements?.bottom_length
-            )}
-          />
-        </View>
+              <MeasurementRow
+                title="Sleeve Length"
+                value={formatMeasurement(
+                  measurements.sleeve_length
+                )}
+              />
+
+              <MeasurementRow
+                title="Top Length"
+                value={formatMeasurement(
+                  measurements.top_length
+                )}
+                last
+              />
+            </View>
+
+            <Text style={styles.sectionTitle}>
+              Lower Body
+            </Text>
+
+            <View style={styles.measurementCard}>
+              <MeasurementRow
+                title="Hips"
+                value={formatMeasurement(
+                  measurements.hips
+                )}
+              />
+
+              <MeasurementRow
+                title="Inseam"
+                value={formatMeasurement(
+                  measurements.inseam
+                )}
+              />
+
+              <MeasurementRow
+                title="Bottom Length"
+                value={formatMeasurement(
+                  measurements.bottom_length
+                )}
+                last
+              />
+            </View>
+          </>
+        )}
 
         <TouchableOpacity
           style={styles.editButton}
@@ -242,15 +377,15 @@ export default function OrderMeasurementsScreen({
         <TouchableOpacity
           style={[
             styles.continueButton,
-            loading && { opacity: 0.5 },
+            (loading || loadError || !measurements) && {
+              opacity: 0.5,
+            },
           ]}
           onPress={continueToReview}
-          disabled={loading}
+          disabled={loading || loadError}
         >
           <Text style={styles.continueButtonText}>
-            {loading
-              ? 'LOADING...'
-              : 'CONTINUE TO REVIEW'}
+            CONTINUE TO REVIEW
           </Text>
         </TouchableOpacity>
       </ScrollView>
@@ -261,14 +396,21 @@ export default function OrderMeasurementsScreen({
 type MeasurementRowProps = {
   title: string;
   value: string;
+  last?: boolean;
 };
 
 function MeasurementRow({
   title,
   value,
+  last = false,
 }: MeasurementRowProps) {
   return (
-    <View style={styles.row}>
+    <View
+      style={[
+        styles.row,
+        last && styles.lastRow,
+      ]}
+    >
       <Text style={styles.measurementName}>
         {title}
       </Text>
@@ -287,28 +429,21 @@ const styles = StyleSheet.create({
   },
 
   content: {
-    padding: 20,
+    paddingTop: 20,
     paddingBottom: 40,
   },
 
   header: {
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 15,
-    marginBottom: 20,
-  },
-
-  headerSpace: {
-    width: 30,
+    marginTop: 10,
+    marginBottom: 15,
   },
 
   title: {
-    flex: 1,
-    textAlign: 'center',
     fontSize: 24,
     fontWeight: 'bold',
     color: '#d96b8a',
+    textAlign: 'center',
   },
 
   infoText: {
@@ -316,10 +451,11 @@ const styles = StyleSheet.create({
     color: '#777',
     marginBottom: 25,
     textAlign: 'center',
+    lineHeight: 21,
   },
 
   sectionTitle: {
-    fontSize: 20,
+    fontSize: 19,
     fontWeight: 'bold',
     color: '#333',
     marginBottom: 12,
@@ -329,7 +465,8 @@ const styles = StyleSheet.create({
   measurementCard: {
     backgroundColor: '#fdf1f5',
     borderRadius: 12,
-    padding: 15,
+    paddingHorizontal: 15,
+    paddingVertical: 5,
     marginBottom: 25,
   },
 
@@ -337,20 +474,75 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 14,
+    flexWrap: 'wrap',
+    paddingVertical: 15,
     borderBottomWidth: 1,
     borderBottomColor: '#f3d5df',
+    gap: 8,
+  },
+
+  lastRow: {
+    borderBottomWidth: 0,
   },
 
   measurementName: {
     fontSize: 15,
     color: '#333',
     fontWeight: '600',
+    flexShrink: 1,
   },
 
   measurementValue: {
     fontSize: 15,
     color: '#d96b8a',
+    fontWeight: 'bold',
+  },
+
+  loadingContainer: {
+    paddingVertical: 50,
+    alignItems: 'center',
+  },
+
+  loadingText: {
+    marginTop: 12,
+    color: '#777',
+    fontSize: 14,
+  },
+
+  emptyContainer: {
+    backgroundColor: '#fdf1f5',
+    padding: 22,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: 'bold',
+    color: '#333',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+
+  emptyText: {
+    fontSize: 14,
+    color: '#777',
+    textAlign: 'center',
+    lineHeight: 21,
+  },
+
+  retryButton: {
+    backgroundColor: '#e8558a',
+    paddingHorizontal: 22,
+    paddingVertical: 12,
+    borderRadius: 9,
+    marginTop: 18,
+  },
+
+  retryButtonText: {
+    color: '#fff',
+    fontSize: 13,
     fontWeight: 'bold',
   },
 

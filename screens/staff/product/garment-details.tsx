@@ -28,7 +28,7 @@ import {
 
 import {
   RootStackParamList,
-} from '../../navigator';
+} from '../../../navigator';
 
 type Props = NativeStackScreenProps<
   RootStackParamList,

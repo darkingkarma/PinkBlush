@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import { RootStackParamList } from '../navigator';
+import { RootStackParamList } from '../../navigator';
 import { supabase } from '../../supabase';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Welcome'>;
@@ -95,7 +95,7 @@ function CatalogImage({
     <Image
       source={{ uri: imageUrl }}
       style={styles.productImage}
-      resizeMode="cover"
+      resizeMode="contain"
       onError={() => setImageFailed(true)}
     />
   );

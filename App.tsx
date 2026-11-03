@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import SplashScreen from './screens/customer/splash';
-import AppNavigator from './screens/navigator';
+import AppNavigator from './navigator';
 
 export default function App() {
   const [showSplash, setShowSplash] = useState(true);
