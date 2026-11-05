@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+
+import { useCallback, useEffect, useState } from 'react';
 
 import {
   ActivityIndicator,
@@ -8,17 +9,24 @@ import {
   Text,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
 
 import { Ionicons } from '@expo/vector-icons';
+
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 
 import { supabase } from '../../../supabase';
 import type { RootStackParamList } from '../../../navigator';
 
+WebBrowser.maybeCompleteAuthSession();
+
 type Props = NativeStackScreenProps<RootStackParamList, 'Payment'>;
+
+type OrderType = 'catalog' | 'custom';
 
 type OrderSummary = {
   total: number;
@@ -26,19 +34,36 @@ type OrderSummary = {
   balance: number;
 };
 
-const wait = (milliseconds: number) =>
-  new Promise(resolve => setTimeout(resolve, milliseconds));
+type PaymentRecord = {
+  id: string;
+  status: string;
+  payment_method?: string | null;
+  transaction_id?: string | null;
+};
+
+const wait = (ms: number) =>
+  new Promise(resolve => setTimeout(resolve, ms));
 
 export default function PaymentScreen({ route, navigation }: Props) {
-  const { orderId, orderType } = route.params;
+  const { orderId, orderType } = route.params as {
+    orderId: string;
+    orderType: OrderType;
+    totalAmount?: number;
+  };
+
+  const { width } = useWindowDimensions();
+
+  const horizontalPadding =
+    width < 380 ? 14 : width < 600 ? 20 : 28;
 
   const [summary, setSummary] = useState<OrderSummary | null>(null);
+
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [checkingPayment, setCheckingPayment] = useState(false);
 
   const [pendingPaymentId, setPendingPaymentId] = useState<string | null>(
-    null
+    null,
   );
 
   const [pendingPaypalOrderId, setPendingPaypalOrderId] = useState<
@@ -51,174 +76,171 @@ export default function PaymentScreen({ route, navigation }: Props) {
       maximumFractionDigits: 2,
     })}`;
 
-  // =========================================
-  // LOAD ORDER AND CHECK EXISTING PAYMENT
-  // =========================================
+  const goToReceipt = (paymentId: string) => {
+    navigation.replace('Receipt', {
+      orderId,
+      paymentId,
+      orderType,
+    });
+  };
 
-  useEffect(() => {
+  const loadOrder = useCallback(async () => {
     let mounted = true;
 
-    const loadOrder = async () => {
-      try {
-        const {
-          data: { user },
-          error: userError,
-        } = await supabase.auth.getUser();
+    try {
+      setLoading(true);
 
-        if (userError || !user) {
-          throw new Error('Please log in again to continue.');
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+
+      if (authError || !user) {
+        throw new Error('Please log in again to continue.');
+      }
+
+      let total = 0;
+      let deposit = 0;
+
+      if (orderType === 'catalog') {
+        const { data: order, error } = await supabase
+          .from('orders')
+          .select('id, total_amount')
+          .eq('id', orderId)
+          .eq('customer_id', user.id)
+          .single();
+
+        if (error || !order) {
+          throw new Error('Unable to find your catalog order.');
         }
 
-        let total = 0;
-        let deposit = 0;
+        total = Number(order.total_amount);
 
-        if (orderType === 'catalog') {
-          const { data: order, error } = await supabase
-            .from('orders')
-            .select('id, total_amount')
-            .eq('id', orderId)
-            .eq('customer_id', user.id)
-            .single();
+        // Catalog orders use a 50% deposit.
+        deposit = Math.round(total * 0.5 * 100) / 100;
+      } else {
+        const { data: order, error } = await supabase
+          .from('custom_orders')
+          .select('id, quoted_price, deposit_amount, status')
+          .eq('id', orderId)
+          .eq('user_id', user.id)
+          .single();
 
-          if (error || !order) {
-            throw new Error('Catalog order could not be found.');
-          }
-
-          total = Number(order.total_amount);
-          deposit = Math.round(total * 0.5 * 100) / 100;
-        } else {
-          const { data: order, error } = await supabase
-            .from('custom_orders')
-            .select('id, quoted_price, deposit_amount, status')
-            .eq('id', orderId)
-            .eq('user_id', user.id)
-            .single();
-
-          if (error || !order) {
-            throw new Error('Custom order could not be found.');
-          }
-
-          if (order.status !== 'accepted') {
-            throw new Error(
-              'You must accept the quotation before paying the deposit.'
-            );
-          }
-
-          total = Number(order.quoted_price);
-          deposit = Number(order.deposit_amount);
+        if (error || !order) {
+          throw new Error('Unable to find your custom order.');
         }
 
-        if (
-          !Number.isFinite(total) ||
-          !Number.isFinite(deposit) ||
-          total <= 0 ||
-          deposit <= 0 ||
-          deposit > total
-        ) {
-          throw new Error('The order has an invalid price or deposit.');
+        if (order.status !== 'accepted') {
+          throw new Error(
+            'You can only pay after accepting the quotation.',
+          );
         }
 
-        if (!mounted) return;
+        total = Number(order.quoted_price);
+        deposit = Number(order.deposit_amount);
+      }
 
-        setSummary({
-          total,
-          deposit,
-          balance: Math.round((total - deposit) * 100) / 100,
-        });
+      if (
+        !Number.isFinite(total) ||
+        !Number.isFinite(deposit) ||
+        total <= 0 ||
+        deposit <= 0 ||
+        deposit > total
+      ) {
+        throw new Error('The order payment amount is invalid.');
+      }
 
-        // Check whether this deposit has already been paid.
-        let paidQuery = supabase
-          .from('payments')
-          .select('id')
-          .eq('payment_type', 'deposit')
-          .eq('status', 'paid');
+      if (!mounted) return;
 
-        paidQuery =
-          orderType === 'catalog'
-            ? paidQuery.eq('order_id', orderId)
-            : paidQuery.eq('custom_order_id', orderId);
+      setSummary({
+        total,
+        deposit,
+        balance: total - deposit,
+      });
 
-        const { data: paidPayment, error: paidError } = await paidQuery
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
+      let paymentsQuery = supabase
+        .from('payments')
+        .select('id, status, payment_method, transaction_id')
+        .eq('payment_type', 'deposit')
+        .order('created_at', { ascending: false });
 
-        if (paidError) {
-          throw new Error('Unable to check your previous payment.');
+      paymentsQuery =
+        orderType === 'catalog'
+          ? paymentsQuery.eq('order_id', orderId)
+          : paymentsQuery.eq('custom_order_id', orderId);
+
+      const { data: payments, error: paymentsError } =
+        await paymentsQuery;
+
+      if (paymentsError) {
+        throw paymentsError;
+      }
+
+      const paymentRecords = (payments || []) as PaymentRecord[];
+
+      const paidPayment = paymentRecords.find(
+        payment => payment.status === 'paid',
+      );
+
+      if (paidPayment) {
+        goToReceipt(paidPayment.id);
+        return;
+      }
+
+      const pendingPayment = paymentRecords.find(
+        payment => payment.status === 'pending',
+      );
+
+      if (pendingPayment) {
+        setPendingPaymentId(pendingPayment.id);
+
+        if (pendingPayment.payment_method === 'paypal') {
+          setPendingPaypalOrderId(
+            pendingPayment.transaction_id || null,
+          );
         }
+      }
+    } catch (error: any) {
+      console.error('Payment screen load error:', error);
 
-        if (!mounted) return;
-
-        if (paidPayment) {
-          navigation.replace('Receipt', {
-            orderId,
-            paymentId: paidPayment.id,
-            orderType,
-          });
-          return;
-        }
-
-        // Find an existing pending deposit.
-        let pendingQuery = supabase
-          .from('payments')
-          .select('id, payment_method, transaction_id')
-          .eq('payment_type', 'deposit')
-          .eq('status', 'pending');
-
-        pendingQuery =
-          orderType === 'catalog'
-            ? pendingQuery.eq('order_id', orderId)
-            : pendingQuery.eq('custom_order_id', orderId);
-
-        const { data: pendingPayment, error: pendingError } =
-          await pendingQuery
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-
-        if (pendingError) {
-          throw new Error('Unable to check pending payments.');
-        }
-
-        if (mounted && pendingPayment) {
-          setPendingPaymentId(pendingPayment.id);
-
-          if (
-            pendingPayment.payment_method === 'paypal' &&
-            pendingPayment.transaction_id
-          ) {
-            setPendingPaypalOrderId(pendingPayment.transaction_id);
-          }
-        }
-      } catch (error) {
-        const message =
-          error instanceof Error
-            ? error.message
-            : 'Unable to load your order.';
-
-        Alert.alert('Order Error', message, [
+      Alert.alert(
+        'Unable to Load Payment',
+        error.message || 'Something went wrong while loading your order.',
+        [
           {
             text: 'Go Back',
             onPress: () => navigation.goBack(),
           },
-        ]);
-      } finally {
-        if (mounted) {
-          setLoading(false);
-        }
+        ],
+      );
+    } finally {
+      if (mounted) {
+        setLoading(false);
       }
-    };
-
-    void loadOrder();
+    }
 
     return () => {
       mounted = false;
     };
   }, [orderId, orderType, navigation]);
 
-  // =========================================
-  // VERIFY GCASH PAYMENT THROUGH DATABASE
-  // =========================================
+  useEffect(() => {
+    let active = true;
+
+    const load = async () => {
+      const cleanup = await loadOrder();
+
+      if (!active && typeof cleanup === 'function') {
+        cleanup();
+      }
+    };
+
+    load();
+
+    return () => {
+      active = false;
+    };
+  }, [loadOrder]);
 
   const verifyPayment = async (paymentId: string) => {
     if (checkingPayment) return;
@@ -231,111 +253,94 @@ export default function PaymentScreen({ route, navigation }: Props) {
           .from('payments')
           .select('id, status')
           .eq('id', paymentId)
-          .maybeSingle();
+          .single();
 
         if (error) {
-          throw new Error(
-            'Unable to check payment status. Please try again.'
-          );
+          throw error;
         }
 
-        if (!payment) {
-          throw new Error('Payment record could not be found.');
-        }
-
-        if (payment.status === 'paid') {
-          setPendingPaymentId(null);
-          setPendingPaypalOrderId(null);
-
-          navigation.replace('Receipt', {
-            orderId,
-            paymentId: payment.id,
-            orderType,
-          });
-
+        if (payment?.status === 'paid') {
+          goToReceipt(payment.id);
           return;
         }
 
-        if (payment.status === 'failed') {
+        if (
+          payment?.status === 'failed' ||
+          payment?.status === 'cancelled'
+        ) {
           setPendingPaymentId(null);
           setPendingPaypalOrderId(null);
 
           Alert.alert(
-            'Payment Failed',
-            'Your payment was not completed. You can start a new checkout.'
+            'Payment Not Completed',
+            'Your payment was not successful. You can try again.',
           );
 
           return;
         }
 
-        if (payment.status !== 'pending') {
-          throw new Error('The payment has an unexpected status.');
+        if (payment?.status !== 'pending') {
+          throw new Error('Unable to verify the payment status.');
         }
 
         await wait(2000);
       }
 
-      setPendingPaymentId(paymentId);
-
       Alert.alert(
         'Payment Still Processing',
-        'Your payment has not yet been confirmed. Please check again shortly. Do not create another payment while this one is pending.'
+        'Your payment has not been confirmed yet. Please check again later. Do not make another payment while this one is pending.',
       );
-    } catch (error) {
+    } catch (error: any) {
+      console.error('Payment verification error:', error);
+
       Alert.alert(
         'Verification Error',
-        error instanceof Error
-          ? error.message
-          : 'Unable to verify your payment.'
+        error.message || 'Unable to verify your payment.',
       );
     } finally {
       setCheckingPayment(false);
     }
   };
 
-  // =========================================
-  // CHECK EXISTING PENDING PAYMENT
-  // =========================================
-
   const handleCheckPayment = async () => {
-    if (!pendingPaymentId || checkingPayment || processing) return;
+    if (!pendingPaymentId) {
+      Alert.alert('No Pending Payment', 'There is no payment to check.');
+      return;
+    }
 
-    // PayPal pending payment: attempt secure server-side capture.
     if (pendingPaypalOrderId) {
-      setProcessing(true);
-
       try {
-        const { data, error } =
-          await supabase.functions.invoke('capture-paypal-order', {
+        setProcessing(true);
+
+        const { data, error } = await supabase.functions.invoke(
+          'capture-paypal-order',
+          {
             body: {
               paypalOrderId: pendingPaypalOrderId,
             },
-          });
+          },
+        );
 
-        if (error || !data?.success) {
-          throw new Error(
-            data?.error ||
-              error?.message ||
-              'PayPal has not confirmed your payment yet.'
-          );
+        if (error) throw error;
+
+        if (data?.success) {
+          setPendingPaymentId(null);
+          setPendingPaypalOrderId(null);
+          goToReceipt(pendingPaymentId);
+          return;
         }
 
-        const paymentId = pendingPaymentId;
-
-        setPendingPaymentId(null);
-        setPendingPaypalOrderId(null);
-
-        navigation.replace('Receipt', {
-          orderId,
-          paymentId,
-          orderType,
-        });
-      } catch (error) {
         Alert.alert(
-          'PayPal Verification',
-          error instanceof Error
-            ? error.message
-            : 'Unable to verify PayPal payment.'
+          'Payment Not Confirmed',
+          data?.message ||
+            'PayPal has not confirmed your payment yet. Please try checking again later.',
+        );
+      } catch (error: any) {
+        console.error('PayPal capture error:', error);
+
+        Alert.alert(
+          'Unable to Check Payment',
+          error.message || 'Please try again later.',
         );
       } finally {
         setProcessing(false);
@@ -344,25 +349,22 @@ export default function PaymentScreen({ route, navigation }: Props) {
       return;
     }
 
-    // GCash pending payment: check database/webhook status.
     await verifyPayment(pendingPaymentId);
   };
 
-  // =========================================
-  // START GCASH CHECKOUT
-  // =========================================
-
-  const handleGCashPayment = () => {
-    if (processing || checkingPayment || !summary) return;
+  const handleGCashPayment = async () => {
+    if (processing || checkingPayment) return;
 
     if (pendingPaymentId) {
-      void handleCheckPayment();
+      await handleCheckPayment();
       return;
     }
 
     Alert.alert(
-      'Confirm Deposit',
-      `Continue to pay ${formatPrice(summary.deposit)} through GCash?`,
+      'Confirm GCash Payment',
+      `You are about to pay ${formatPrice(
+        summary!.deposit,
+      )} as your order deposit.`,
       [
         {
           text: 'Cancel',
@@ -371,80 +373,68 @@ export default function PaymentScreen({ route, navigation }: Props) {
         {
           text: 'Continue',
           onPress: async () => {
-            setProcessing(true);
-
             try {
+              setProcessing(true);
+
               const appReturnUrl = Linking.createURL('payment-return');
-              console.log('GCASH APP RETURN URL:', appReturnUrl);
 
-              const { data, error } =
-                await supabase.functions.invoke(
-                  'create-paymongo-checkout',
-                  {
-                    body: {
-                      orderId,
-                      orderType,
-                      appReturnUrl,
-                    },
-                  }
-                );
-                
+              const { data, error } = await supabase.functions.invoke(
+                'create-paymongo-checkout',
+                {
+                  body: {
+                    orderId,
+                    orderType,
+                    appReturnUrl,
+                  },
+                },
+              );
 
-              if (error) {
-                throw new Error(
-                  data?.error ||
-                    error.message ||
-                    'Unable to create checkout.'
-                );
-              }
+              if (error) throw error;
 
               if (!data?.checkoutUrl || !data?.paymentId) {
                 throw new Error(
-                  data?.error ||
-                    'Checkout details were not returned.'
+                  data?.message || 'Unable to create GCash checkout.',
                 );
               }
 
               setPendingPaymentId(data.paymentId);
-              setPendingPaypalOrderId(null);
 
               await WebBrowser.openAuthSessionAsync(
                 data.checkoutUrl,
-                appReturnUrl
+                appReturnUrl,
               );
 
               await verifyPayment(data.paymentId);
-            } catch (error) {
+            } catch (error: any) {
+              console.error('GCash payment error:', error);
+
               Alert.alert(
-                'Checkout Error',
-                error instanceof Error
-                  ? error.message
-                  : 'Something went wrong. Please try again.'
+                'GCash Payment Error',
+                error.message ||
+                  'Unable to start your GCash payment. Please try again.',
               );
             } finally {
               setProcessing(false);
             }
           },
         },
-      ]
+      ],
     );
   };
 
-  // =========================================
-  // START PAYPAL CHECKOUT
-  // =========================================
-
-  const handlePayPalPayment = () => {
-    if (processing || checkingPayment || !summary) return;
+  const handlePayPalPayment = async () => {
+    if (processing || checkingPayment) return;
 
     if (pendingPaymentId) {
-      void handleCheckPayment();
+      await handleCheckPayment();
       return;
     }
 
     Alert.alert(
-      'Confirm Deposit',
-      `Continue to pay ${formatPrice(summary.deposit)} through PayPal?`,
+      'Confirm PayPal Payment',
+      `You are about to pay ${formatPrice(
+        summary!.deposit,
+      )} as your order deposit.`,
       [
         {
           text: 'Cancel',
@@ -453,27 +443,20 @@ export default function PaymentScreen({ route, navigation }: Props) {
         {
           text: 'Continue',
           onPress: async () => {
-            setProcessing(true);
-
             try {
-              const { data, error } =
-                await supabase.functions.invoke(
-                  'create-paypal-order',
-                  {
-                    body: {
-                      orderId,
-                      orderType,
-                    },
-                  }
-                );
+              setProcessing(true);
 
-              if (error) {
-                throw new Error(
-                  data?.error ||
-                    error.message ||
-                    'Unable to create PayPal checkout.'
-                );
-              }
+              const { data, error } = await supabase.functions.invoke(
+                'create-paypal-order',
+                {
+                  body: {
+                    orderId,
+                    orderType,
+                  },
+                },
+              );
+
+              if (error) throw error;
 
               if (
                 !data?.success ||
@@ -482,531 +465,556 @@ export default function PaymentScreen({ route, navigation }: Props) {
                 !data?.approvalUrl
               ) {
                 throw new Error(
-                  data?.error ||
-                    'PayPal checkout details were not returned.'
+                  data?.message || 'Unable to create PayPal payment.',
                 );
               }
 
               setPendingPaymentId(data.paymentId);
               setPendingPaypalOrderId(data.paypalOrderId);
 
-              // Must match the app scheme used in create-paypal-order.
-              const appReturnUrl = 'pinkblush://payment';
-
-              const browserResult =
-                await WebBrowser.openAuthSessionAsync(
-                  data.approvalUrl,
-                  appReturnUrl
-                );
-
-              if (browserResult.type !== 'success') {
-                Alert.alert(
-                  'Checkout Not Completed',
-                  'PayPal checkout was closed. Your payment is still pending. Please check its status before attempting another payment.'
-                );
-                return;
-              }
-
-              const parsed = Linking.parse(browserResult.url);
-              const params = parsed.queryParams ?? {};
-
-              const returnedResult = params.result;
-              const returnedOrderId = params.orderId;
-
-              if (returnedResult !== 'success') {
-                Alert.alert(
-                  'Payment Cancelled',
-                  'You cancelled the PayPal checkout. Your payment has not been confirmed.'
-                );
-                return;
-              }
-
-              if (
-                typeof returnedOrderId !== 'string' ||
-                returnedOrderId !== data.paypalOrderId
-              ) {
-                throw new Error(
-                  'The returned PayPal order ID does not match the checkout.'
-                );
-              }
-
-              // Capture and verify payment on the server.
-              const {
-                data: captureData,
-                error: captureError,
-              } = await supabase.functions.invoke(
-                'capture-paypal-order',
-                {
-                  body: {
-                    paypalOrderId: returnedOrderId,
-                  },
-                }
+              const result = await WebBrowser.openAuthSessionAsync(
+                data.approvalUrl,
+                'pinkblush://payment',
               );
 
-              if (captureError || !captureData?.success) {
-                throw new Error(
-                  captureData?.error ||
-                    captureError?.message ||
-                    'Unable to confirm PayPal payment.'
+              if (result.type !== 'success' || !result.url) {
+                Alert.alert(
+                  'Payment Pending',
+                  'PayPal checkout was closed or has not returned confirmation. Use Check Payment Status before trying again.',
                 );
+                return;
               }
 
-              setPendingPaymentId(null);
-              setPendingPaypalOrderId(null);
+              const parsed = Linking.parse(result.url);
+              const query = parsed.queryParams || {};
 
-              navigation.replace('Receipt', {
-                orderId,
-                paymentId: data.paymentId,
-                orderType,
-              });
-            } catch (error) {
+              const paymentResult = String(query.result || '');
+              const returnedOrderId = String(query.orderId || '');
+
+              if (
+                paymentResult !== 'success' ||
+                returnedOrderId !== data.paypalOrderId
+              ) {
+                Alert.alert(
+                  'Payment Not Confirmed',
+                  'PayPal did not return a successful payment confirmation. You can check the payment status later.',
+                );
+                return;
+              }
+
+              const { data: captureData, error: captureError } =
+                await supabase.functions.invoke(
+                  'capture-paypal-order',
+                  {
+                    body: {
+                      paypalOrderId: data.paypalOrderId,
+                    },
+                  },
+                );
+
+              if (captureError) throw captureError;
+
+              if (captureData?.success) {
+                setPendingPaymentId(null);
+                setPendingPaypalOrderId(null);
+                goToReceipt(data.paymentId);
+              } else {
+                Alert.alert(
+                  'Payment Pending',
+                  captureData?.message ||
+                    'PayPal has not confirmed your payment yet. Please check again later.',
+                );
+              }
+            } catch (error: any) {
+              console.error('PayPal payment error:', error);
+
               Alert.alert(
-                'PayPal Checkout Error',
-                error instanceof Error
-                  ? error.message
-                  : 'Something went wrong with PayPal.'
+                'PayPal Payment Error',
+                error.message ||
+                  'Unable to complete PayPal payment. Please try again.',
               );
             } finally {
               setProcessing(false);
             }
           },
         },
-      ]
+      ],
     );
   };
-
-  // =========================================
-  // LOADING
-  // =========================================
 
   if (loading || !summary) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#B84470" />
-
-        <Text style={styles.loadingText}>
-          Loading order details...
-        </Text>
+        <ActivityIndicator size="large" color="#D96B8A" />
+        <Text style={styles.loadingText}>Loading payment details...</Text>
       </View>
     );
   }
 
-  // =========================================
-  // SCREEN
-  // =========================================
+  const isBusy = processing || checkingPayment;
 
   return (
     <ScrollView
       style={styles.container}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[
+        styles.content,
+        {
+          paddingHorizontal: horizontalPadding,
+        },
+      ]}
+      showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
     >
-      <View style={styles.header}>
-        <View style={styles.headerIcon}>
-          <Ionicons name="wallet-outline" size={30} color="#B84470" />
+      <View style={styles.mainContent}>
+        <View style={styles.header}>
+          <View style={styles.headerIcon}>
+            <Ionicons
+              name="wallet-outline"
+              size={30}
+              color="#D96B8A"
+            />
+          </View>
+
+          <Text style={styles.title}>Pay Your Deposit</Text>
+
+          <Text style={styles.subtitle}>
+            Choose your preferred payment method to continue your order.
+          </Text>
         </View>
 
-        <Text style={styles.title}>Pay Your Deposit</Text>
+        {pendingPaymentId && (
+          <View style={styles.pendingNotice}>
+            <Ionicons
+              name="time-outline"
+              size={22}
+              color="#B7791F"
+            />
 
-        <Text style={styles.subtitle}>
-          Pay your deposit to continue with your garment order.
-        </Text>
-      </View>
+            <View style={styles.pendingTextContainer}>
+              <Text style={styles.pendingTitle}>
+                Payment Awaiting Confirmation
+              </Text>
 
-      {pendingPaymentId && (
-        <View style={styles.pendingNotice}>
-          <Ionicons
-            name="time-outline"
-            size={23}
-            color="#9A5B12"
-          />
+              <Text style={styles.pendingDescription}>
+                A payment has already been started for this order. Check its
+                status before attempting another payment.
+              </Text>
+            </View>
+          </View>
+        )}
 
-          <View style={styles.noticeTextContainer}>
-            <Text style={styles.pendingTitle}>
-              Payment Awaiting Confirmation
+        <View style={styles.summaryCard}>
+          <Text style={styles.sectionTitle}>Order Summary</Text>
+
+          <View style={styles.referenceRow}>
+            <Text style={styles.referenceLabel}>Order Reference</Text>
+
+            <Text style={styles.referenceValue}>
+              #{orderId.slice(0, 8).toUpperCase()}
             </Text>
+          </View>
 
-            <Text style={styles.pendingText}>
-              A payment for this order is already pending. Check its
-              status before attempting another payment.
+          <View style={styles.divider} />
+
+          <View style={styles.amountRow}>
+            <Text style={styles.amountLabel}>Total Order Amount</Text>
+            <Text style={styles.amountValue}>
+              {formatPrice(summary.total)}
+            </Text>
+          </View>
+
+          <View style={styles.amountRow}>
+            <Text style={styles.amountLabel}>Deposit to Pay</Text>
+            <Text style={styles.depositValue}>
+              {formatPrice(summary.deposit)}
+            </Text>
+          </View>
+
+          <View style={styles.amountRow}>
+            <Text style={styles.amountLabel}>Remaining Balance</Text>
+            <Text style={styles.amountValue}>
+              {formatPrice(summary.balance)}
+            </Text>
+          </View>
+
+          <View style={styles.balanceNote}>
+            <Ionicons
+              name="information-circle-outline"
+              size={17}
+              color="#B84470"
+            />
+
+            <Text style={styles.balanceNoteText}>
+              Your remaining balance will be paid at pickup.
             </Text>
           </View>
         </View>
-      )}
 
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Order Summary</Text>
+        <Text style={styles.sectionTitle}>Select Payment Method</Text>
 
-        <View style={styles.orderReference}>
-          <Text style={styles.mutedText}>Order Reference</Text>
-
-          <Text style={styles.reference}>
-            #{orderId.slice(0, 8).toUpperCase()}
-          </Text>
-
-          <Text style={styles.orderType}>
-            {orderType === 'custom' ? 'Custom Order' : 'Catalog Order'}
-          </Text>
-        </View>
-
-        <View style={styles.amountRow}>
-          <Text style={styles.mutedText}>Total Order Price</Text>
-
-          <Text style={styles.amount}>
-            {formatPrice(summary.total)}
-          </Text>
-        </View>
-
-        <View style={styles.amountRow}>
-          <Text style={styles.depositLabel}>Deposit Due</Text>
-
-          <Text style={styles.depositAmount}>
-            {formatPrice(summary.deposit)}
-          </Text>
-        </View>
-
-        <View style={styles.amountRow}>
-          <Text style={styles.mutedText}>Remaining Balance</Text>
-
-          <Text style={styles.amount}>
-            {formatPrice(summary.balance)}
-          </Text>
-        </View>
-
-        <Text style={styles.balanceNote}>
-          The remaining balance is intended to be paid in cash at pickup.
-        </Text>
-      </View>
-
-      <Text style={styles.sectionTitle}>Payment Method</Text>
-
-      {/* GCASH */}
-      <TouchableOpacity
-        style={styles.methodCard}
-        activeOpacity={0.85}
-        onPress={handleGCashPayment}
-        disabled={processing || checkingPayment}
-      >
-        <View style={[styles.methodIcon, styles.gcashIcon]}>
-          <Ionicons
-            name="phone-portrait-outline"
-            size={26}
-            color="#FFFFFF"
-          />
-        </View>
-
-        <View style={styles.methodInfo}>
-          <Text style={styles.methodName}>GCash</Text>
-
-          <Text style={styles.methodDescription}>
-            Pay securely through PayMongo checkout.
-          </Text>
-        </View>
-
-        <Ionicons
-          name="chevron-forward"
-          size={22}
-          color="#B84470"
-        />
-      </TouchableOpacity>
-
-      {/* PAYPAL */}
-      <TouchableOpacity
-        style={styles.methodCard}
-        activeOpacity={0.85}
-        onPress={handlePayPalPayment}
-        disabled={processing || checkingPayment}
-      >
-        <View style={[styles.methodIcon, styles.paypalIcon]}>
-          <Ionicons
-            name="logo-paypal"
-            size={26}
-            color="#FFFFFF"
-          />
-        </View>
-
-        <View style={styles.methodInfo}>
-          <Text style={styles.methodName}>PayPal</Text>
-
-          <Text style={styles.methodDescription}>
-            Pay securely using your PayPal account.
-          </Text>
-        </View>
-
-        <Ionicons
-          name="chevron-forward"
-          size={22}
-          color="#B84470"
-        />
-      </TouchableOpacity>
-
-      {/* CHECK PENDING PAYMENT */}
-      {pendingPaymentId && (
         <TouchableOpacity
           style={[
-            styles.payButton,
-            (processing || checkingPayment) && styles.disabledButton,
+            styles.paymentCard,
+            isBusy && styles.disabledCard,
           ]}
-          onPress={handleCheckPayment}
-          disabled={processing || checkingPayment}
-          activeOpacity={0.85}
+          onPress={handleGCashPayment}
+          disabled={isBusy}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel="Pay deposit using GCash"
+          accessibilityState={{ disabled: isBusy }}
         >
-          {processing || checkingPayment ? (
-            <ActivityIndicator color="#FFFFFF" />
-          ) : (
-            <>
+          <View style={styles.paymentIconContainer}>
+            <Ionicons name="phone-portrait" size={28} color="#0879D1" />
+          </View>
+
+          <View style={styles.paymentInfo}>
+            <Text style={styles.paymentName}>GCash</Text>
+
+            <Text style={styles.paymentDescription}>
+              Pay securely through GCash using PayMongo.
+            </Text>
+          </View>
+
+          <Ionicons
+            name="chevron-forward"
+            size={22}
+            color="#999"
+          />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.paymentCard,
+            isBusy && styles.disabledCard,
+          ]}
+          onPress={handlePayPalPayment}
+          disabled={isBusy}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel="Pay deposit using PayPal"
+          accessibilityState={{ disabled: isBusy }}
+        >
+          <View style={styles.paymentIconContainer}>
+            <Ionicons name="logo-paypal" size={28} color="#003087" />
+          </View>
+
+          <View style={styles.paymentInfo}>
+            <Text style={styles.paymentName}>PayPal</Text>
+
+            <Text style={styles.paymentDescription}>
+              Pay securely using your PayPal account.
+            </Text>
+          </View>
+
+          <Ionicons
+            name="chevron-forward"
+            size={22}
+            color="#999"
+          />
+        </TouchableOpacity>
+
+        {pendingPaymentId && (
+          <TouchableOpacity
+            style={[
+              styles.checkButton,
+              isBusy && styles.disabledButton,
+            ]}
+            onPress={handleCheckPayment}
+            disabled={isBusy}
+            activeOpacity={0.8}
+          >
+            {isBusy ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
               <Ionicons
-                name="refresh-circle-outline"
-                size={21}
+                name="refresh-outline"
+                size={20}
                 color="#FFFFFF"
               />
+            )}
 
-              <Text style={styles.payButtonText}>
-                Check Payment Status
-              </Text>
-            </>
-          )}
-        </TouchableOpacity>
-      )}
+            <Text style={styles.checkButtonText}>
+              {isBusy ? 'Checking Payment...' : 'Check Payment Status'}
+            </Text>
+          </TouchableOpacity>
+        )}
 
-      {(processing || checkingPayment) && (
-        <View style={styles.checkingContainer}>
-          <ActivityIndicator size="small" color="#B84470" />
+        {isBusy && (
+          <View style={styles.processingContainer}>
+            <ActivityIndicator size="small" color="#D96B8A" />
 
-          <Text style={styles.checkingText}>
-            {processing
-              ? 'Processing payment...'
-              : 'Verifying your payment...'}
+            <Text style={styles.processingText}>
+              {checkingPayment
+                ? 'Verifying your payment...'
+                : 'Processing your request...'}
+            </Text>
+          </View>
+        )}
+
+        <View style={styles.securityNote}>
+          <Ionicons
+            name="shield-checkmark-outline"
+            size={20}
+            color="#57956A"
+          />
+
+          <Text style={styles.securityText}>
+            Your payment will only be marked as paid after confirmation from
+            the payment provider.
           </Text>
         </View>
-      )}
-
-      <Text style={styles.footerNote}>
-        Your payment will only be recorded as paid after the payment
-        provider confirms the transaction.
-      </Text>
+      </View>
     </ScrollView>
   );
 }
 
-// =========================================
-// STYLES
-// =========================================
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFF7FA',
+    backgroundColor: '#FFF8FA',
   },
 
   content: {
-    padding: 20,
-    paddingBottom: 40,
+    flexGrow: 1,
+    alignItems: 'center',
+    paddingTop: 24,
+    paddingBottom: 35,
+  },
+
+  mainContent: {
+    width: '100%',
+    maxWidth: 650,
   },
 
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#FFF7FA',
+    backgroundColor: '#FFF8FA',
   },
 
   loadingText: {
     marginTop: 12,
     fontSize: 14,
-    color: '#816875',
+    color: '#777',
   },
 
   header: {
     alignItems: 'center',
-    marginBottom: 22,
+    marginBottom: 25,
   },
 
   headerIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: '#FCE4ED',
-    alignItems: 'center',
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    backgroundColor: '#FCE7EE',
     justifyContent: 'center',
-    marginBottom: 12,
+    alignItems: 'center',
+    marginBottom: 13,
   },
 
   title: {
     fontSize: 25,
     fontWeight: '800',
-    color: '#3B2430',
+    color: '#333',
     textAlign: 'center',
   },
 
   subtitle: {
     fontSize: 14,
-    color: '#816875',
+    color: '#888',
     textAlign: 'center',
-    marginTop: 8,
     lineHeight: 21,
+    marginTop: 7,
+    maxWidth: 400,
   },
 
   pendingNotice: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    backgroundColor: '#FFF1D6',
-    borderColor: '#F4D69A',
+    backgroundColor: '#FFF4DD',
+    borderRadius: 13,
+    padding: 14,
+    marginBottom: 18,
     borderWidth: 1,
-    borderRadius: 12,
-    padding: 13,
-    marginBottom: 20,
+    borderColor: '#F3D99D',
   },
 
-  noticeTextContainer: {
+  pendingTextContainer: {
     flex: 1,
     marginLeft: 10,
   },
 
   pendingTitle: {
     fontSize: 14,
-    fontWeight: '800',
-    color: '#87520C',
-    marginBottom: 4,
+    fontWeight: '700',
+    color: '#8A5A12',
   },
 
-  pendingText: {
+  pendingDescription: {
     fontSize: 12,
     lineHeight: 18,
-    color: '#87520C',
+    color: '#8A6A36',
+    marginTop: 4,
   },
 
-  card: {
+  summaryCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 18,
-    marginBottom: 24,
+    borderRadius: 17,
+    padding: 19,
+    marginBottom: 25,
     borderWidth: 1,
-    borderColor: '#F3DCE5',
+    borderColor: '#F3E4E9',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 5,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
   },
 
   sectionTitle: {
     fontSize: 17,
     fontWeight: '800',
-    color: '#3B2430',
+    color: '#333',
+    marginBottom: 15,
+  },
+
+  referenceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
     marginBottom: 14,
   },
 
-  orderReference: {
-    paddingBottom: 14,
-    marginBottom: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F3E7EC',
-  },
-
-  mutedText: {
+  referenceLabel: {
     fontSize: 13,
-    color: '#816875',
+    color: '#888',
   },
 
-  reference: {
-    fontSize: 15,
-    fontWeight: '800',
+  referenceValue: {
+    fontSize: 13,
+    fontWeight: '700',
     color: '#B84470',
-    marginTop: 5,
   },
 
-  orderType: {
-    fontSize: 12,
-    color: '#816875',
-    marginTop: 4,
+  divider: {
+    height: 1,
+    backgroundColor: '#F0E6E9',
+    marginBottom: 14,
   },
 
   amountRow: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 15,
-    gap: 12,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 13,
   },
 
-  amount: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#3B2430',
-  },
-
-  depositLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#B84470',
+  amountLabel: {
     flex: 1,
+    fontSize: 13,
+    color: '#777',
   },
 
-  depositAmount: {
-    fontSize: 18,
+  amountValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#444',
+    textAlign: 'right',
+  },
+
+  depositValue: {
+    fontSize: 16,
     fontWeight: '800',
-    color: '#B84470',
+    color: '#D96B8A',
+    textAlign: 'right',
   },
 
   balanceNote: {
-    fontSize: 12,
-    lineHeight: 18,
-    color: '#816875',
-    backgroundColor: '#FFF7FA',
-    padding: 10,
-    borderRadius: 8,
-    marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#FFF1F5',
+    borderRadius: 10,
+    padding: 11,
+    marginTop: 5,
   },
 
-  methodCard: {
+  balanceNoteText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#A34D6A',
+    lineHeight: 18,
+    marginLeft: 7,
+  },
+
+  paymentCard: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
-    borderWidth: 1.5,
-    borderColor: '#F0DCE4',
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 12,
+    borderRadius: 15,
+    padding: 16,
+    marginBottom: 13,
+    borderWidth: 1,
+    borderColor: '#F0E1E7',
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOpacity: 0.03,
+    shadowRadius: 3,
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
   },
 
-  methodIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: 12,
-    alignItems: 'center',
+  disabledCard: {
+    opacity: 0.55,
+  },
+
+  paymentIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 13,
+    backgroundColor: '#F5F7FA',
     justifyContent: 'center',
+    alignItems: 'center',
   },
 
-  gcashIcon: {
-    backgroundColor: '#007DFE',
-  },
-
-  paypalIcon: {
-    backgroundColor: '#003087',
-  },
-
-  methodInfo: {
+  paymentInfo: {
     flex: 1,
-    marginLeft: 12,
+    marginHorizontal: 13,
   },
 
-  methodName: {
+  paymentName: {
     fontSize: 15,
     fontWeight: '800',
-    color: '#3B2430',
+    color: '#333',
   },
 
-  methodDescription: {
+  paymentDescription: {
     fontSize: 12,
-    color: '#816875',
+    color: '#888',
+    lineHeight: 17,
     marginTop: 4,
   },
 
-  payButton: {
+  checkButton: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
     backgroundColor: '#B84470',
     borderRadius: 13,
-    paddingVertical: 16,
-    paddingHorizontal: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 12,
+    paddingVertical: 15,
+    paddingHorizontal: 16,
+    marginTop: 7,
     gap: 9,
   },
 
@@ -1014,30 +1022,38 @@ const styles = StyleSheet.create({
     opacity: 0.65,
   },
 
-  payButtonText: {
-    fontSize: 15,
-    fontWeight: '800',
+  checkButtonText: {
     color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
   },
 
-  checkingContainer: {
+  processingContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 16,
+    marginTop: 17,
     gap: 9,
   },
 
-  checkingText: {
+  processingText: {
     fontSize: 13,
-    color: '#816875',
+    color: '#888',
   },
 
-  footerNote: {
-    fontSize: 11,
-    lineHeight: 17,
-    color: '#816875',
-    textAlign: 'center',
-    marginTop: 14,
+  securityNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    marginTop: 24,
+    paddingHorizontal: 8,
+    gap: 8,
+  },
+
+  securityText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#888',
+    lineHeight: 18,
   },
 });

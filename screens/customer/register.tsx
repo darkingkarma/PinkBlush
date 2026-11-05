@@ -9,6 +9,8 @@ import {
   View,
   Image,
   ScrollView,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
@@ -80,6 +82,7 @@ export default function RegisterScreen({ navigation }: Props) {
     }
 
     const normalizedEmail = email.trim().toLowerCase();
+
     const gmailPattern =
       /^[a-z0-9](?:[a-z0-9.]*[a-z0-9])?@gmail\.com$/;
 
@@ -135,23 +138,36 @@ export default function RegisterScreen({ navigation }: Props) {
         return;
       }
 
-      // If Supabase automatically signs the new user in,
-      // sign them out before showing the Login screen.
-      if (data.session) {
-        const { error: signOutError } = await supabase.auth.signOut();
+      // Email confirmation is enabled:
+      // Supabase creates the account but does not create a session yet.
+      if (!data.session) {
+        Alert.alert(
+          'Check Your Email',
+          `We have sent a verification link to ${normalizedEmail}.\n\nPlease open your email, tap the verification link, and then return to Pink Blush to log in.`,
+          [
+            {
+              text: 'Go to Login',
+              onPress: () => {
+                navigation.reset({
+                  index: 0,
+                  routes: [{ name: 'Login' }],
+                });
+              },
+            },
+          ],
+          { cancelable: false }
+        );
 
-        if (signOutError) {
-          Alert.alert(
-            'Account Created',
-            'Your account was created, but automatic sign-out failed. Please sign out before logging in.'
-          );
-          return;
-        }
+        return;
       }
 
+      // Unexpected active session: sign out and do not show
+      // a successful email-verification message.
+      await supabase.auth.signOut();
+
       Alert.alert(
-        'Registration Successful',
-        'Your account has been created. Please log in.',
+        'Email Verification Required',
+        'Supabase returned an active session even though email confirmation should be enabled. Please check your Supabase Confirm email settings before continuing.',
         [
           {
             text: 'Go to Login',
@@ -165,6 +181,8 @@ export default function RegisterScreen({ navigation }: Props) {
         ],
         { cancelable: false }
       );
+
+      return;
     } catch (error: any) {
       Alert.alert(
         'Error',
@@ -176,203 +194,221 @@ export default function RegisterScreen({ navigation }: Props) {
   };
 
   return (
-    <ScrollView
+    <KeyboardAvoidingView
       style={styles.container}
-      contentContainerStyle={styles.contentContainer}
-      keyboardShouldPersistTaps="handled"
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      <Image
-        source={require('../../assets/Pink Blush Fashion Logo.png')}
-        style={styles.logo}
-        resizeMode="contain"
-      />
-
-      <Text style={styles.description}>
-        Garment Order and Production Management
-      </Text>
-
-      <Text style={styles.title}>Create Account</Text>
-
-      <Text style={styles.label}>Username</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="Create a username"
-        placeholderTextColor="#aaa"
-        autoCapitalize="none"
-        value={username}
-        onChangeText={setUsername}
-      />
-
-      <Text style={styles.label}>Full Name</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="Enter your full name"
-        placeholderTextColor="#aaa"
-        value={fullName}
-        onChangeText={setFullName}
-      />
-
-      <Text style={styles.label}>Contact Number</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="Enter contact number"
-        placeholderTextColor="#aaa"
-        keyboardType="phone-pad"
-        value={contactNumber}
-        onChangeText={setContactNumber}
-      />
-
-      <Text style={styles.label}>Email Address</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="Enter Gmail address"
-        placeholderTextColor="#aaa"
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="email-address"
-        autoComplete="email"
-        value={email}
-        onChangeText={setEmail}
-      />
-
-      <Text style={styles.label}>Password</Text>
-      <View style={styles.passwordContainer}>
-        <TextInput
-          style={styles.passwordInput}
-          placeholder="Create a strong password"
-          placeholderTextColor="#aaa"
-          secureTextEntry={!showPassword}
-          autoCapitalize="none"
-          autoComplete="new-password"
-          value={password}
-          onChangeText={setPassword}
+      <ScrollView
+        contentContainerStyle={styles.contentContainer}
+        keyboardShouldPersistTaps="handled"
+      >
+        <Image
+          source={require('../../assets/Pink Blush Fashion Logo.png')}
+          style={styles.logo}
+          resizeMode="contain"
         />
-        <TouchableOpacity
-          onPress={() => setShowPassword(!showPassword)}
-          style={styles.showButton}
-          accessibilityRole="button"
-          accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
-        >
-          <Text style={styles.showButtonText}>
-            {showPassword ? 'Hide' : 'Show'}
-          </Text>
-        </TouchableOpacity>
-      </View>
 
-      {password.length > 0 && (
-        <View style={styles.strengthContainer}>
-          <View style={styles.strengthHeader}>
-            <Text style={styles.strengthTitle}>Password strength</Text>
-            <Text
-              style={[
-                styles.strengthLabel,
-                {
-                  color:
-                    strengthScore === 5
-                      ? '#16803c'
-                      : strengthScore >= 3
-                      ? '#c17b08'
-                      : '#d93025',
-                },
-              ]}
-            >
-              {strengthLabel}
+        <Text style={styles.description}>
+          Garment Order and Production Management
+        </Text>
+
+        <Text style={styles.title}>Create Account</Text>
+
+        <Text style={styles.label}>Username</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Create a username"
+          placeholderTextColor="#aaa"
+          autoCapitalize="none"
+          value={username}
+          onChangeText={setUsername}
+        />
+
+        <Text style={styles.label}>Full Name</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Enter your full name"
+          placeholderTextColor="#aaa"
+          value={fullName}
+          onChangeText={setFullName}
+        />
+
+        <Text style={styles.label}>Contact Number</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Enter contact number"
+          placeholderTextColor="#aaa"
+          keyboardType="phone-pad"
+          value={contactNumber}
+          onChangeText={setContactNumber}
+        />
+
+        <Text style={styles.label}>Email Address</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Enter Gmail address"
+          placeholderTextColor="#aaa"
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="email-address"
+          autoComplete="email"
+          value={email}
+          onChangeText={setEmail}
+        />
+
+        <Text style={styles.label}>Password</Text>
+        <View style={styles.passwordContainer}>
+          <TextInput
+            style={styles.passwordInput}
+            placeholder="Create a strong password"
+            placeholderTextColor="#aaa"
+            secureTextEntry={!showPassword}
+            autoCapitalize="none"
+            autoComplete="new-password"
+            value={password}
+            onChangeText={setPassword}
+          />
+
+          <TouchableOpacity
+            onPress={() => setShowPassword(!showPassword)}
+            style={styles.showButton}
+            accessibilityRole="button"
+            accessibilityLabel={
+              showPassword ? 'Hide password' : 'Show password'
+            }
+          >
+            <Text style={styles.showButtonText}>
+              {showPassword ? 'Hide' : 'Show'}
             </Text>
-          </View>
+          </TouchableOpacity>
+        </View>
 
-          <View style={styles.strengthBars}>
-            {[1, 2, 3, 4, 5].map((bar) => (
-              <View
-                key={bar}
+        {password.length > 0 && (
+          <View style={styles.strengthContainer}>
+            <View style={styles.strengthHeader}>
+              <Text style={styles.strengthTitle}>Password strength</Text>
+              <Text
                 style={[
-                  styles.strengthBar,
+                  styles.strengthLabel,
                   {
-                    backgroundColor:
-                      bar <= strengthScore
-                        ? strengthScore === 5
-                          ? '#16803c'
-                          : strengthScore >= 3
-                          ? '#e6a23c'
-                          : '#d93025'
-                        : '#e5e7eb',
+                    color:
+                      strengthScore === 5
+                        ? '#16803c'
+                        : strengthScore >= 3
+                        ? '#c17b08'
+                        : '#d93025',
                   },
                 ]}
-              />
+              >
+                {strengthLabel}
+              </Text>
+            </View>
+
+            <View style={styles.strengthBars}>
+              {[1, 2, 3, 4, 5].map((bar) => (
+                <View
+                  key={bar}
+                  style={[
+                    styles.strengthBar,
+                    {
+                      backgroundColor:
+                        bar <= strengthScore
+                          ? strengthScore === 5
+                            ? '#16803c'
+                            : strengthScore >= 3
+                            ? '#e6a23c'
+                            : '#d93025'
+                          : '#e5e7eb',
+                    },
+                  ]}
+                />
+              ))}
+            </View>
+
+            {passwordRules.map((rule) => (
+              <Text
+                key={rule.label}
+                style={[
+                  styles.ruleText,
+                  { color: rule.valid ? '#16803c' : '#777' },
+                ]}
+              >
+                {rule.valid ? '✓' : '○'} {rule.label}
+              </Text>
             ))}
           </View>
-
-          {passwordRules.map((rule) => (
-            <Text
-              key={rule.label}
-              style={[
-                styles.ruleText,
-                { color: rule.valid ? '#16803c' : '#777' },
-              ]}
-            >
-              {rule.valid ? '✓' : '○'} {rule.label}
-            </Text>
-          ))}
-        </View>
-      )}
-
-      <Text style={styles.label}>Confirm Password</Text>
-      <View style={styles.passwordContainer}>
-        <TextInput
-          style={styles.passwordInput}
-          placeholder="Confirm your password"
-          placeholderTextColor="#aaa"
-          secureTextEntry={!showConfirmPassword}
-          autoCapitalize="none"
-          autoComplete="new-password"
-          value={confirmPassword}
-          onChangeText={setConfirmPassword}
-        />
-        <TouchableOpacity
-          onPress={() => setShowConfirmPassword(!showConfirmPassword)}
-          style={styles.showButton}
-          accessibilityRole="button"
-          accessibilityLabel={
-            showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'
-          }
-        >
-          <Text style={styles.showButtonText}>
-            {showConfirmPassword ? 'Hide' : 'Show'}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {confirmPassword.length > 0 && password !== confirmPassword && (
-        <Text style={styles.mismatchText}>Passwords do not match.</Text>
-      )}
-
-      {confirmPassword.length > 0 &&
-        password === confirmPassword &&
-        password.length > 0 && (
-          <Text style={styles.matchText}>✓ Passwords match.</Text>
         )}
 
-      <TouchableOpacity
-        style={[
-          styles.button,
-          (!validPassword || isRegistering) && styles.buttonDisabled,
-        ]}
-        onPress={handleRegister}
-        activeOpacity={0.8}
-        disabled={isRegistering}
-      >
-        <Text style={styles.buttonText}>
-          {isRegistering ? 'CREATING ACCOUNT...' : 'CREATE ACCOUNT'}
-        </Text>
-      </TouchableOpacity>
+        <Text style={styles.label}>Confirm Password</Text>
+        <View style={styles.passwordContainer}>
+          <TextInput
+            style={styles.passwordInput}
+            placeholder="Confirm your password"
+            placeholderTextColor="#aaa"
+            secureTextEntry={!showConfirmPassword}
+            autoCapitalize="none"
+            autoComplete="new-password"
+            value={confirmPassword}
+            onChangeText={setConfirmPassword}
+          />
 
-      <View style={styles.bottomTextWrapper}>
-        <Text style={styles.bottomText}>Already have an account? </Text>
-        <TouchableOpacity onPress={() => navigation.navigate('Login')}>
-          <Text style={styles.loginText}>Log In</Text>
+          <TouchableOpacity
+            onPress={() =>
+              setShowConfirmPassword(!showConfirmPassword)
+            }
+            style={styles.showButton}
+            accessibilityRole="button"
+            accessibilityLabel={
+              showConfirmPassword
+                ? 'Hide confirm password'
+                : 'Show confirm password'
+            }
+          >
+            <Text style={styles.showButtonText}>
+              {showConfirmPassword ? 'Hide' : 'Show'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {confirmPassword.length > 0 && password !== confirmPassword && (
+          <Text style={styles.mismatchText}>
+            Passwords do not match.
+          </Text>
+        )}
+
+        {confirmPassword.length > 0 &&
+          password === confirmPassword &&
+          password.length > 0 && (
+            <Text style={styles.matchText}>
+              ✓ Passwords match.
+            </Text>
+          )}
+
+        <TouchableOpacity
+          style={[
+            styles.button,
+            (!validPassword || isRegistering) && styles.buttonDisabled,
+          ]}
+          onPress={handleRegister}
+          activeOpacity={0.8}
+          disabled={isRegistering}
+        >
+          <Text style={styles.buttonText}>
+            {isRegistering ? 'CREATING ACCOUNT...' : 'CREATE ACCOUNT'}
+          </Text>
         </TouchableOpacity>
-      </View>
-    </ScrollView>
-  );
+
+        <View style={styles.bottomTextWrapper}>
+          <Text style={styles.bottomText}>
+            Already have an account?{' '}
+          </Text>
+          <TouchableOpacity onPress={() => navigation.navigate('Login')}>
+            <Text style={styles.loginText}>Log In</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+  </KeyboardAvoidingView>
+);
 }
 
 const styles = StyleSheet.create({
@@ -383,11 +419,12 @@ const styles = StyleSheet.create({
   contentContainer: {
     padding: 25,
     paddingTop: 40,
-    paddingBottom: 40,
+    paddingBottom: 60,
   },
   logo: {
-    width: 220,
-    height: 100,
+    width: '70%', 
+    maxWidth: 210,
+    height: 90,
     alignSelf: 'center',
   },
   description: {

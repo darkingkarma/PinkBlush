@@ -62,7 +62,15 @@ type Fabric = SelectedFabric & {
   available: boolean;
 };
 
+type DesignFabricRow = {
+  fabrics: Fabric | Fabric[] | null;
+};
+
 type ModalType = 'design' | 'fabric' | null;
+
+const MAX_QUANTITY = 99;
+const CONTENT_MAX_WIDTH = 850;
+const MODAL_MAX_WIDTH = 680;
 
 // Reusable image component with broken-image fallback.
 function OptionImage({
@@ -87,9 +95,7 @@ function OptionImage({
           color="#d96b8a"
         />
 
-        <Text style={styles.placeholderText}>
-          No image
-        </Text>
+        <Text style={styles.placeholderText}>No image</Text>
       </View>
     );
   }
@@ -118,6 +124,9 @@ export default function ConfigurePartsScreen({
   } = route.params;
 
   const { width: screenWidth } = useWindowDimensions();
+
+  const isTablet = screenWidth >= 700;
+  const cardPadding = screenWidth < 360 ? 12 : 16;
 
   const [parts, setParts] = useState<GarmentPart[]>([]);
 
@@ -178,11 +187,11 @@ export default function ConfigurePartsScreen({
 
       setParts(availableParts);
 
-      // Keep only selections belonging to available parts.
       const availableIds = new Set(
         availableParts.map((part) => part.id)
       );
 
+      // Keep only selections belonging to available parts.
       setSelectedDesigns((current) => {
         const updated: Record<string, SelectedDesign> = {};
 
@@ -231,6 +240,8 @@ export default function ConfigurePartsScreen({
     setPendingDesign(null);
     setPendingFabric(null);
     setOptionsError('');
+    setDesigns([]);
+    setFabrics([]);
   };
 
   // Open design selection.
@@ -302,8 +313,10 @@ export default function ConfigurePartsScreen({
 
       if (error) throw error;
 
-      const fabricList = (data || [])
-        .map((item: any) => {
+      const rows = (data || []) as unknown as DesignFabricRow[];
+
+      const fabricList = rows
+        .map((item) => {
           const related = Array.isArray(item.fabrics)
             ? item.fabrics[0]
             : item.fabrics;
@@ -311,9 +324,9 @@ export default function ConfigurePartsScreen({
           return related;
         })
         .filter(
-          (fabric: Fabric | null | undefined) =>
-            fabric && fabric.available
-        ) as Fabric[];
+          (fabric): fabric is Fabric =>
+            !!fabric && fabric.available === true
+        );
 
       setFabrics(fabricList);
 
@@ -359,17 +372,30 @@ export default function ConfigurePartsScreen({
         return;
       }
 
+      // Make sure the selected design is still in the loaded options.
+      const validDesign = designs.find(
+        (design) => design.id === pendingDesign.id
+      );
+
+      if (!validDesign) {
+        Alert.alert(
+          'Design Unavailable',
+          'Please select an available design.'
+        );
+        return;
+      }
+
       const previousDesign = selectedDesigns[activePart.id];
 
       setSelectedDesigns((current) => ({
         ...current,
-        [activePart.id]: pendingDesign,
+        [activePart.id]: validDesign,
       }));
 
       // A changed design may have different available fabrics.
       if (
         previousDesign &&
-        previousDesign.id !== pendingDesign.id
+        previousDesign.id !== validDesign.id
       ) {
         setSelectedFabrics((current) => {
           const updated = { ...current };
@@ -388,9 +414,22 @@ export default function ConfigurePartsScreen({
         return;
       }
 
+      // Make sure the selected fabric is in the current design's options.
+      const validFabric = fabrics.find(
+        (fabric) => fabric.id === pendingFabric.id
+      );
+
+      if (!validFabric) {
+        Alert.alert(
+          'Fabric Unavailable',
+          'Please select an available fabric for this design.'
+        );
+        return;
+      }
+
       setSelectedFabrics((current) => ({
         ...current,
-        [activePart.id]: pendingFabric,
+        [activePart.id]: validFabric,
       }));
     }
 
@@ -399,10 +438,18 @@ export default function ConfigurePartsScreen({
 
   // Quantity controls.
   const increaseQuantity = (partId: string) => {
-    setQuantities((current) => ({
-      ...current,
-      [partId]: (current[partId] || 1) + 1,
-    }));
+    setQuantities((current) => {
+      const quantity = current[partId] || 1;
+
+      if (quantity >= MAX_QUANTITY) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [partId]: quantity + 1,
+      };
+    });
   };
 
   const decreaseQuantity = (partId: string) => {
@@ -497,24 +544,21 @@ export default function ConfigurePartsScreen({
     });
   };
 
-  // Responsive card sizing.
-  const cardPadding = screenWidth < 360 ? 12 : 16;
-
   return (
     <View style={styles.container}>
       {/* Screen Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>
-          Configure Parts
-        </Text>
+        <View style={styles.contentWidth}>
+          <Text style={styles.title}>Configure Parts</Text>
 
-        <Text style={styles.subtitle}>
-          {garment.name}
-        </Text>
+          <Text style={styles.subtitle}>
+            {garment.name}
+          </Text>
 
-        <Text style={styles.helperText}>
-          Choose a design first, then select a fabric available for that design.
-        </Text>
+          <Text style={styles.helperText}>
+            Choose a design first, then select a fabric available for that design.
+          </Text>
+        </View>
       </View>
 
       {loading ? (
@@ -583,7 +627,7 @@ export default function ConfigurePartsScreen({
               <View>
                 {/* Total */}
                 <View style={styles.totalBox}>
-                  <View>
+                  <View style={styles.totalInfo}>
                     <Text style={styles.totalLabel}>
                       Order Subtotal
                     </Text>
@@ -696,8 +740,10 @@ export default function ConfigurePartsScreen({
                 {/* Design Selection */}
                 <TouchableOpacity
                   style={styles.selectionBox}
-                  onPress={() => openDesignModal(item)}
+                  onPress={() => void openDesignModal(item)}
                   activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Choose design for ${item.name}`}
                 >
                   <OptionImage imageUrl={design?.image_url} />
 
@@ -736,9 +782,12 @@ export default function ConfigurePartsScreen({
                     styles.selectionBox,
                     !design && styles.disabledSelectionBox,
                   ]}
-                  onPress={() => openFabricModal(item)}
+                  onPress={() => void openFabricModal(item)}
                   disabled={!design}
                   activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Choose fabric for ${item.name}`}
+                  accessibilityState={{ disabled: !design }}
                 >
                   <OptionImage imageUrl={fabric?.image_url} />
 
@@ -784,13 +833,13 @@ export default function ConfigurePartsScreen({
 
                 {/* Quantity */}
                 <View style={styles.quantityBox}>
-                  <View>
+                  <View style={styles.quantityInfo}>
                     <Text style={styles.optionTitle}>
                       Quantity
                     </Text>
 
                     <Text style={styles.quantityHint}>
-                      Number of pieces
+                      Number of pieces (max. {MAX_QUANTITY})
                     </Text>
                   </View>
 
@@ -803,6 +852,8 @@ export default function ConfigurePartsScreen({
                       ]}
                       onPress={() => decreaseQuantity(item.id)}
                       disabled={quantity <= 1}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Decrease quantity for ${item.name}`}
                     >
                       <Ionicons
                         name="remove"
@@ -816,13 +867,24 @@ export default function ConfigurePartsScreen({
                     </Text>
 
                     <TouchableOpacity
-                      style={styles.quantityButton}
+                      style={[
+                        styles.quantityButton,
+                        quantity >= MAX_QUANTITY &&
+                          styles.quantityButtonDisabled,
+                      ]}
                       onPress={() => increaseQuantity(item.id)}
+                      disabled={quantity >= MAX_QUANTITY}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Increase quantity for ${item.name}`}
                     >
                       <Ionicons
                         name="add"
                         size={20}
-                        color="#d96b8a"
+                        color={
+                          quantity >= MAX_QUANTITY
+                            ? '#bbb'
+                            : '#d96b8a'
+                        }
                       />
                     </TouchableOpacity>
                   </View>
@@ -853,7 +915,12 @@ export default function ConfigurePartsScreen({
         statusBarTranslucent
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalSheet}>
+          <View
+            style={[
+              styles.modalSheet,
+              isTablet && styles.modalSheetTablet,
+            ]}
+          >
             <View style={styles.modalHandle} />
 
             {/* Modal Header */}
@@ -873,6 +940,8 @@ export default function ConfigurePartsScreen({
               <TouchableOpacity
                 style={styles.closeButton}
                 onPress={closeModal}
+                accessibilityRole="button"
+                accessibilityLabel="Close selection"
               >
                 <Ionicons
                   name="close"
@@ -1087,15 +1156,31 @@ export default function ConfigurePartsScreen({
                   (
                     loadingOptions ||
                     !!optionsError ||
-                    (modalType === 'design' && !pendingDesign) ||
-                    (modalType === 'fabric' && !pendingFabric)
+                    (modalType === 'design' &&
+                      (!pendingDesign ||
+                        !designs.some(
+                          (design) => design.id === pendingDesign.id
+                        ))) ||
+                    (modalType === 'fabric' &&
+                      (!pendingFabric ||
+                        !fabrics.some(
+                          (fabric) => fabric.id === pendingFabric.id
+                        )))
                   ) && styles.confirmButtonDisabled,
                 ]}
                 disabled={
                   loadingOptions ||
                   !!optionsError ||
-                  (modalType === 'design' && !pendingDesign) ||
-                  (modalType === 'fabric' && !pendingFabric)
+                  (modalType === 'design' &&
+                    (!pendingDesign ||
+                      !designs.some(
+                        (design) => design.id === pendingDesign.id
+                      ))) ||
+                  (modalType === 'fabric' &&
+                    (!pendingFabric ||
+                      !fabrics.some(
+                        (fabric) => fabric.id === pendingFabric.id
+                      )))
                 }
                 onPress={confirmSelection}
               >
@@ -1117,7 +1202,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF8FA',
   },
 
+  contentWidth: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+  },
+
   header: {
+    width: '100%',
     paddingHorizontal: 20,
     paddingTop: 18,
     paddingBottom: 12,
@@ -1144,6 +1236,9 @@ const styles = StyleSheet.create({
   },
 
   list: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
     paddingHorizontal: 16,
     paddingTop: 8,
     paddingBottom: 30,
@@ -1168,6 +1263,7 @@ const styles = StyleSheet.create({
 
   partHeading: {
     flex: 1,
+    minWidth: 0,
   },
 
   partName: {
@@ -1334,6 +1430,11 @@ const styles = StyleSheet.create({
     gap: 8,
   },
 
+  quantityInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+
   quantityHint: {
     fontSize: 11,
     color: '#999',
@@ -1400,6 +1501,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: 10,
+  },
+
+  totalInfo: {
+    flex: 1,
+    minWidth: 0,
   },
 
   totalLabel: {
@@ -1499,9 +1605,11 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'flex-end',
+    alignItems: 'center',
   },
 
   modalSheet: {
+    width: '100%',
     height: '85%',
     maxHeight: '90%',
     backgroundColor: '#fff',
@@ -1510,6 +1618,15 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     paddingHorizontal: 16,
     paddingBottom: 20,
+  },
+
+  modalSheetTablet: {
+    width: '85%',
+    maxWidth: MODAL_MAX_WIDTH,
+    height: '85%',
+    maxHeight: 850,
+    borderRadius: 24,
+    marginBottom: 20,
   },
 
   modalHandle: {
@@ -1530,6 +1647,7 @@ const styles = StyleSheet.create({
 
   modalHeading: {
     flex: 1,
+    minWidth: 0,
   },
 
   modalTitle: {

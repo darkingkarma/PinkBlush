@@ -16,7 +16,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 
 import { supabase } from '../../supabase';
-
+import { unregisterPushNotificationsAsync } from '../../pushNotifications';
 export default function StaffProfileTab() {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -81,10 +81,30 @@ export default function StaffProfileTab() {
           text: 'Log Out',
           style: 'destructive',
           onPress: async () => {
-            const { error } = await supabase.auth.signOut();
+            try {
+              const {
+                data: { user },
+                error: userError,
+              } = await supabase.auth.getUser();
 
-            if (error) {
-              Alert.alert('Logout Failed', error.message);
+              if (userError) throw userError;
+
+              if (user) {
+                await unregisterPushNotificationsAsync(user.id);
+              }
+
+              const { error } = await supabase.auth.signOut();
+
+              if (error) throw error;
+            } catch (error) {
+              console.error('Staff logout error:', error);
+
+              Alert.alert(
+                'Logout Failed',
+                error instanceof Error
+                  ? error.message
+                  : 'Unable to log out. Please try again.',
+              );
             }
           },
         },

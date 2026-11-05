@@ -54,7 +54,6 @@ const initialStats: DashboardStats = {
 };
 
 export default function StaffDashboard({ navigation }: Props) {
-  // ROOT NAVIGATION
   const rootNavigation =
     useNavigation<NavigationProp<RootStackParamList>>();
 
@@ -62,10 +61,23 @@ export default function StaffDashboard({ navigation }: Props) {
   const [recentOrders, setRecentOrders] = useState<RecentOrder[]>([]);
   const [recentPayments, setRecentPayments] = useState<RecentPayment[]>([]);
   const [loading, setLoading] = useState(true);
+  const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false);
 
   const loadDashboard = useCallback(async () => {
     try {
       setLoading(true);
+
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) throw userError;
+
+      if (!user) {
+        setHasUnreadNotifications(false);
+        return;
+      }
 
       const [
         catalogResult,
@@ -73,8 +85,10 @@ export default function StaffDashboard({ navigation }: Props) {
         catalogRecentResult,
         customRecentResult,
         paymentsResult,
+        unreadNotificationsResult,
       ] = await Promise.all([
         supabase.from('orders').select('status'),
+
         supabase.from('custom_orders').select('status'),
 
         supabase
@@ -94,6 +108,12 @@ export default function StaffDashboard({ navigation }: Props) {
           .select('id, payment_type, status, created_at')
           .order('created_at', { ascending: false })
           .limit(3),
+
+        supabase
+          .from('notifications')
+          .select('id', { count: 'exact', head: true })
+          .eq('recipient_id', user.id)
+          .eq('is_read', false),
       ]);
 
       if (catalogResult.error) throw catalogResult.error;
@@ -101,6 +121,13 @@ export default function StaffDashboard({ navigation }: Props) {
       if (catalogRecentResult.error) throw catalogRecentResult.error;
       if (customRecentResult.error) throw customRecentResult.error;
       if (paymentsResult.error) throw paymentsResult.error;
+      if (unreadNotificationsResult.error) {
+        throw unreadNotificationsResult.error;
+      }
+
+      setHasUnreadNotifications(
+        (unreadNotificationsResult.count ?? 0) > 0
+      );
 
       const catalogOrders = catalogResult.data ?? [];
       const customOrders = customResult.data ?? [];
@@ -186,11 +213,10 @@ export default function StaffDashboard({ navigation }: Props) {
 
   useFocusEffect(
     useCallback(() => {
-      loadDashboard();
+      void loadDashboard();
     }, [loadDashboard])
   );
 
-  // OPEN NOTIFICATIONS
   const handleNotifications = () => {
     rootNavigation.navigate('Notifications');
   };
@@ -260,7 +286,9 @@ export default function StaffDashboard({ navigation }: Props) {
             color="#d96b8a"
           />
 
-          <View style={styles.notificationDot} />
+          {hasUnreadNotifications && (
+            <View style={styles.notificationDot} />
+          )}
         </TouchableOpacity>
       </View>
 
@@ -302,9 +330,7 @@ export default function StaffDashboard({ navigation }: Props) {
               {stats.totalOrders}
             </Text>
 
-            <Text style={styles.statLabel}>
-              Total Orders
-            </Text>
+            <Text style={styles.statLabel}>Total Orders</Text>
           </View>
 
           <View style={styles.statCard}>
@@ -312,9 +338,7 @@ export default function StaffDashboard({ navigation }: Props) {
               {stats.pendingOrders}
             </Text>
 
-            <Text style={styles.statLabel}>
-              Pending Orders
-            </Text>
+            <Text style={styles.statLabel}>Pending Orders</Text>
           </View>
 
           <View style={styles.statCard}>
@@ -322,9 +346,7 @@ export default function StaffDashboard({ navigation }: Props) {
               {stats.inProduction}
             </Text>
 
-            <Text style={styles.statLabel}>
-              In Production
-            </Text>
+            <Text style={styles.statLabel}>In Production</Text>
           </View>
 
           <View style={styles.statCard}>
@@ -332,17 +354,13 @@ export default function StaffDashboard({ navigation }: Props) {
               {stats.readyForPickup}
             </Text>
 
-            <Text style={styles.statLabel}>
-              Ready for Pickup
-            </Text>
+            <Text style={styles.statLabel}>Ready for Pickup</Text>
           </View>
         </View>
       )}
 
       {/* QUICK ACCESS */}
-      <Text style={styles.sectionTitle}>
-        Quick Access
-      </Text>
+      <Text style={styles.sectionTitle}>Quick Access</Text>
 
       <TouchableOpacity
         style={styles.quickAccessButton}
@@ -350,28 +368,17 @@ export default function StaffDashboard({ navigation }: Props) {
         activeOpacity={0.8}
       >
         <View style={styles.buttonIconContainer}>
-          <Ionicons
-            name="bar-chart-outline"
-            size={22}
-            color="#d96b8a"
-          />
+          <Ionicons name="bar-chart-outline" size={22} color="#d96b8a" />
         </View>
 
         <View style={styles.buttonTextContainer}>
-          <Text style={styles.buttonTitle}>
-            Reports Management
-          </Text>
-
+          <Text style={styles.buttonTitle}>Reports Management</Text>
           <Text style={styles.buttonDescription}>
             View production, payment, and material reports
           </Text>
         </View>
 
-        <Ionicons
-          name="chevron-forward"
-          size={20}
-          color="#d96b8a"
-        />
+        <Ionicons name="chevron-forward" size={20} color="#d96b8a" />
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -380,28 +387,17 @@ export default function StaffDashboard({ navigation }: Props) {
         activeOpacity={0.8}
       >
         <View style={styles.buttonIconContainer}>
-          <Ionicons
-            name="wallet-outline"
-            size={22}
-            color="#d96b8a"
-          />
+          <Ionicons name="wallet-outline" size={22} color="#d96b8a" />
         </View>
 
         <View style={styles.buttonTextContainer}>
-          <Text style={styles.buttonTitle}>
-            Manage Payments
-          </Text>
-
+          <Text style={styles.buttonTitle}>Manage Payments</Text>
           <Text style={styles.buttonDescription}>
             Review customer deposits, balances, and payments
           </Text>
         </View>
 
-        <Ionicons
-          name="chevron-forward"
-          size={20}
-          color="#d96b8a"
-        />
+        <Ionicons name="chevron-forward" size={20} color="#d96b8a" />
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -410,28 +406,17 @@ export default function StaffDashboard({ navigation }: Props) {
         activeOpacity={0.8}
       >
         <View style={styles.buttonIconContainer}>
-          <Ionicons
-            name="shirt-outline"
-            size={22}
-            color="#d96b8a"
-          />
+          <Ionicons name="shirt-outline" size={22} color="#d96b8a" />
         </View>
 
         <View style={styles.buttonTextContainer}>
-          <Text style={styles.buttonTitle}>
-            Manage Garments
-          </Text>
-
+          <Text style={styles.buttonTitle}>Manage Garments</Text>
           <Text style={styles.buttonDescription}>
             Manage garment categories, designs, and fabrics
           </Text>
         </View>
 
-        <Ionicons
-          name="chevron-forward"
-          size={20}
-          color="#d96b8a"
-        />
+        <Ionicons name="chevron-forward" size={20} color="#d96b8a" />
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -448,33 +433,22 @@ export default function StaffDashboard({ navigation }: Props) {
         </View>
 
         <View style={styles.buttonTextContainer}>
-          <Text style={styles.buttonTitle}>
-            Manage Orders
-          </Text>
-
+          <Text style={styles.buttonTitle}>Manage Orders</Text>
           <Text style={styles.buttonDescription}>
             Review catalog orders, custom requests, and assignments
           </Text>
         </View>
 
-        <Ionicons
-          name="chevron-forward"
-          size={20}
-          color="#d96b8a"
-        />
+        <Ionicons name="chevron-forward" size={20} color="#d96b8a" />
       </TouchableOpacity>
 
       {/* RECENT ORDERS */}
       <View style={styles.recentSection}>
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>
-            Recent Orders
-          </Text>
+          <Text style={styles.sectionTitle}>Recent Orders</Text>
 
           <TouchableOpacity onPress={handleManageOrders}>
-            <Text style={styles.viewAllText}>
-              View All
-            </Text>
+            <Text style={styles.viewAllText}>View All</Text>
           </TouchableOpacity>
         </View>
 
@@ -482,9 +456,7 @@ export default function StaffDashboard({ navigation }: Props) {
           <ActivityIndicator color="#d96b8a" />
         ) : recentOrders.length === 0 ? (
           <View style={styles.emptyCard}>
-            <Text style={styles.emptyText}>
-              No recent orders found.
-            </Text>
+            <Text style={styles.emptyText}>No recent orders found.</Text>
           </View>
         ) : (
           recentOrders.map(order => (
@@ -513,14 +485,10 @@ export default function StaffDashboard({ navigation }: Props) {
       {/* RECENT PAYMENTS */}
       <View style={styles.recentSection}>
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>
-            Recent Payments
-          </Text>
+          <Text style={styles.sectionTitle}>Recent Payments</Text>
 
           <TouchableOpacity onPress={handlePayments}>
-            <Text style={styles.viewAllText}>
-              View All
-            </Text>
+            <Text style={styles.viewAllText}>View All</Text>
           </TouchableOpacity>
         </View>
 
@@ -528,21 +496,14 @@ export default function StaffDashboard({ navigation }: Props) {
           <ActivityIndicator color="#d96b8a" />
         ) : recentPayments.length === 0 ? (
           <View style={styles.emptyCard}>
-            <Text style={styles.emptyText}>
-              No recent payments found.
-            </Text>
+            <Text style={styles.emptyText}>No recent payments found.</Text>
           </View>
         ) : (
           recentPayments.map(payment => (
-            <View
-              key={payment.id}
-              style={styles.activityCard}
-            >
+            <View key={payment.id} style={styles.activityCard}>
               <View style={styles.activityDetails}>
                 <Text style={styles.activityTitle}>
-                  {formatStatus(
-                    payment.payment_type || 'Payment'
-                  )}
+                  {formatStatus(payment.payment_type || 'Payment')}
                 </Text>
 
                 <Text style={styles.activityDate}>
@@ -570,9 +531,7 @@ export default function StaffDashboard({ navigation }: Props) {
                       : styles.unpaidText,
                   ]}
                 >
-                  {formatStatus(
-                    payment.status || 'Pending'
-                  )}
+                  {formatStatus(payment.status || 'Pending')}
                 </Text>
               </View>
             </View>

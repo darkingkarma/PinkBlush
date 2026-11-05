@@ -1,4 +1,3 @@
-
 import { useState } from 'react';
 
 import {
@@ -13,6 +12,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+
+import { Ionicons } from '@expo/vector-icons';
 
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
@@ -35,7 +36,7 @@ export default function ChangePasswordScreen({ navigation }: Props) {
 
   const [loading, setLoading] = useState(false);
 
-  // Same password rules as Register
+  // Same password requirements as Register
   const passwordRules = [
     {
       label: 'At least 8 characters',
@@ -112,6 +113,7 @@ export default function ChangePasswordScreen({ navigation }: Props) {
     setLoading(true);
 
     try {
+      // Get the currently logged-in user
       const {
         data: { user },
         error: userError,
@@ -178,17 +180,17 @@ export default function ChangePasswordScreen({ navigation }: Props) {
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={styles.contentContainer}
         keyboardShouldPersistTaps="handled"
       >
         {/* Header */}
         <View style={styles.header}>
           <View style={styles.iconCircle}>
-            <Text style={styles.lockIcon}>🔒</Text>
+            <Ionicons name="lock-closed-outline" size={34} color="#D96B8A" />
           </View>
 
           <Text style={styles.title}>
@@ -227,12 +229,20 @@ export default function ChangePasswordScreen({ navigation }: Props) {
               style={styles.showButton}
               accessibilityRole="button"
               accessibilityLabel={
-                showCurrentPassword ? 'Hide password' : 'Show password'
+                showCurrentPassword
+                  ? 'Hide current password'
+                  : 'Show current password'
               }
             >
-              <Text style={styles.showButtonText}>
-                {showCurrentPassword ? 'Hide' : 'Show'}
-              </Text>
+              <Ionicons
+                name={
+                  showCurrentPassword
+                    ? 'eye-off-outline'
+                    : 'eye-outline'
+                }
+                size={21}
+                color="#E8558A"
+              />
             </TouchableOpacity>
           </View>
 
@@ -260,12 +270,20 @@ export default function ChangePasswordScreen({ navigation }: Props) {
               style={styles.showButton}
               accessibilityRole="button"
               accessibilityLabel={
-                showNewPassword ? 'Hide password' : 'Show password'
+                showNewPassword
+                  ? 'Hide new password'
+                  : 'Show new password'
               }
             >
-              <Text style={styles.showButtonText}>
-                {showNewPassword ? 'Hide' : 'Show'}
-              </Text>
+              <Ionicons
+                name={
+                  showNewPassword
+                    ? 'eye-off-outline'
+                    : 'eye-outline'
+                }
+                size={21}
+                color="#E8558A"
+              />
             </TouchableOpacity>
           </View>
 
@@ -316,17 +334,31 @@ export default function ChangePasswordScreen({ navigation }: Props) {
               </View>
 
               {passwordRules.map((rule) => (
-                <Text
+                <View
                   key={rule.label}
-                  style={[
-                    styles.ruleText,
-                    {
-                      color: rule.valid ? '#16803c' : '#777',
-                    },
-                  ]}
+                  style={styles.ruleRow}
                 >
-                  {rule.valid ? '✓' : '○'} {rule.label}
-                </Text>
+                  <Ionicons
+                    name={
+                      rule.valid
+                        ? 'checkmark-circle'
+                        : 'ellipse-outline'
+                    }
+                    size={15}
+                    color={rule.valid ? '#16803c' : '#999'}
+                  />
+
+                  <Text
+                    style={[
+                      styles.ruleText,
+                      {
+                        color: rule.valid ? '#16803c' : '#777',
+                      },
+                    ]}
+                  >
+                    {rule.label}
+                  </Text>
+                </View>
               ))}
             </View>
           )}
@@ -360,37 +392,60 @@ export default function ChangePasswordScreen({ navigation }: Props) {
                   : 'Show confirm password'
               }
             >
-              <Text style={styles.showButtonText}>
-                {showConfirmPassword ? 'Hide' : 'Show'}
-              </Text>
+              <Ionicons
+                name={
+                  showConfirmPassword
+                    ? 'eye-off-outline'
+                    : 'eye-outline'
+                }
+                size={21}
+                color="#E8558A"
+              />
             </TouchableOpacity>
           </View>
 
           {/* Password Match Feedback */}
           {confirmPassword.length > 0 &&
             newPassword !== confirmPassword && (
-              <Text style={styles.mismatchText}>
-                Passwords do not match.
-              </Text>
+              <View style={styles.feedbackRow}>
+                <Ionicons
+                  name="close-circle"
+                  size={15}
+                  color="#d93025"
+                />
+
+                <Text style={styles.mismatchText}>
+                  Passwords do not match.
+                </Text>
+              </View>
             )}
 
           {confirmPassword.length > 0 &&
             newPassword === confirmPassword &&
             newPassword.length > 0 && (
-              <Text style={styles.matchText}>
-                ✓ Passwords match.
-              </Text>
+              <View style={styles.feedbackRow}>
+                <Ionicons
+                  name="checkmark-circle"
+                  size={15}
+                  color="#16803c"
+                />
+
+                <Text style={styles.matchText}>
+                  Passwords match.
+                </Text>
+              </View>
             )}
 
           {/* Update Button */}
           <TouchableOpacity
             style={[
               styles.button,
-              (!validPassword ||
+              (
+                !validPassword ||
                 newPassword !== confirmPassword ||
                 !currentPassword ||
-                loading) &&
-                styles.buttonDisabled,
+                loading
+              ) && styles.buttonDisabled,
             ]}
             onPress={handleChangePassword}
             activeOpacity={0.8}
@@ -436,15 +491,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#faf9f8',
   },
 
-  content: {
-    flexGrow: 1,
-    padding: 22,
-    paddingBottom: 40,
+  contentContainer: {
+    padding: 25,
+    paddingTop: 40,
+    paddingBottom: 60,
   },
 
   header: {
     alignItems: 'center',
-    marginTop: 25,
     marginBottom: 25,
   },
 
@@ -458,14 +512,12 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
 
-  lockIcon: {
-    fontSize: 30,
-  },
-
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#D96B8A',
+    fontSize: 26,
+    fontStyle: 'italic',
+    fontWeight: '600',
+    color: '#1e2a4a',
+    marginBottom: 8,
   },
 
   subtitle: {
@@ -473,7 +525,6 @@ const styles = StyleSheet.create({
     color: '#999',
     textAlign: 'center',
     lineHeight: 20,
-    marginTop: 8,
     paddingHorizontal: 12,
   },
 
@@ -489,7 +540,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#333',
-    marginBottom: 7,
+    marginBottom: 6,
     marginTop: 13,
   },
 
@@ -498,7 +549,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1.5,
     borderColor: '#e8558a',
-    borderRadius: 8,
+    borderRadius: 6,
     backgroundColor: '#fff',
     marginBottom: 12,
   },
@@ -513,12 +564,6 @@ const styles = StyleSheet.create({
   showButton: {
     paddingHorizontal: 14,
     paddingVertical: 12,
-  },
-
-  showButtonText: {
-    color: '#e8558a',
-    fontSize: 13,
-    fontWeight: '700',
   },
 
   strengthContainer: {
@@ -554,31 +599,41 @@ const styles = StyleSheet.create({
     borderRadius: 5,
   },
 
+  ruleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 5,
+    gap: 7,
+  },
+
   ruleText: {
     fontSize: 12,
-    marginBottom: 5,
+  },
+
+  feedbackRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: -5,
+    marginBottom: 12,
   },
 
   mismatchText: {
     fontSize: 12,
     color: '#d93025',
-    marginTop: -5,
-    marginBottom: 12,
   },
 
   matchText: {
     fontSize: 12,
     color: '#16803c',
-    marginTop: -5,
-    marginBottom: 12,
   },
 
   button: {
     backgroundColor: '#e8558a',
     paddingVertical: 15,
-    borderRadius: 8,
+    borderRadius: 6,
     alignItems: 'center',
-    marginTop: 18,
+    marginTop: 8,
     marginBottom: 10,
   },
 

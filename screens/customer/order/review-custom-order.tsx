@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from 'react';
 
 import {
@@ -9,13 +10,15 @@ import {
   Text,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
 
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { Ionicons } from '@expo/vector-icons';
 
 import { supabase } from '../../../supabase';
 import type { RootStackParamList } from '../../../navigator';
-import { Ionicons } from '@expo/vector-icons';
+
 type Props = NativeStackScreenProps<
   RootStackParamList,
   'ReviewCustomOrder'
@@ -26,6 +29,16 @@ export default function ReviewCustomOrderScreen({
   route,
 }: Props) {
   const { customOrderData, measurement } = route.params;
+
+  const { width } = useWindowDimensions();
+
+  const horizontalPadding =
+    width < 380 ? 14 : width < 600 ? 20 : 28;
+
+  const imageHeight = Math.min(
+    Math.max(width * 0.5, 180),
+    300
+  );
 
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -156,6 +169,7 @@ export default function ReviewCustomOrderScreen({
         'Incomplete Measurements',
         `Please provide a valid ${missingMeasurement.label} measurement before submitting.`
       );
+
       return false;
     }
 
@@ -279,226 +293,275 @@ export default function ReviewCustomOrderScreen({
   return (
     <ScrollView
       style={styles.container}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[
+        styles.content,
+        {
+          paddingHorizontal: horizontalPadding,
+        },
+      ]}
       showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
     >
-      <Text style={styles.title}>
-        Review Your Custom Order
-      </Text>
-
-      <Text style={styles.subtitle}>
-        Check your garment details and measurements before submitting.
-      </Text>
-
-      {/* REFERENCE IMAGE */}
-
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>
-          Reference Image
+      <View style={styles.innerContent}>
+        <Text style={styles.title}>
+          Review Your Custom Order
         </Text>
 
-        {loadingImage ? (
-          <View style={styles.imageLoading}>
-            <ActivityIndicator color="#D96B8A" />
-            <Text style={styles.noImageText}>
-              Loading reference image...
-            </Text>
-          </View>
-        ) : imageUrl ? (
-          <Image
-            source={{ uri: imageUrl }}
-            style={styles.referenceImage}
-            resizeMode="contain"
-          />
-        ) : (
-          <View style={styles.noImage}>
-            <Text style={styles.noImageText}>
-              No reference image uploaded
-            </Text>
-          </View>
-        )}
-      </View>
-
-      {/* GARMENT DETAILS */}
-
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>
-          Garment Details
+        <Text style={styles.subtitle}>
+          Check your garment details and measurements before submitting.
         </Text>
 
-        <Text style={styles.label}>
-          Description
-        </Text>
+        {/* REFERENCE IMAGE */}
 
-        <Text style={styles.value}>
-          {customOrderData.garmentDescription || 'Not provided'}
-        </Text>
-
-        <Text style={styles.label}>
-          Preferred Color
-        </Text>
-
-        <Text style={styles.value}>
-          {customOrderData.preferredColor || 'Not specified'}
-        </Text>
-
-        <Text style={styles.label}>
-          Fabric Preference
-        </Text>
-
-        <Text style={styles.value}>
-          {customOrderData.fabricPreference || 'Not specified'}
-        </Text>
-
-        <Text style={styles.label}>
-          Needed By
-        </Text>
-
-        <Text style={styles.value}>
-          {formatDate(customOrderData.neededByDate)}
-        </Text>
-
-        <Text style={styles.label}>
-          Special Instructions
-        </Text>
-
-        <Text style={styles.value}>
-          {customOrderData.specialInstructions || 'None'}
-        </Text>
-      </View>
-
-      {/* MEASUREMENTS */}
-
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>
-          Your Measurements
-        </Text>
-
-        <Text style={styles.groupTitle}>
-          Upper Body
-        </Text>
-
-        <MeasurementRow
-          label="Shoulder"
-          value={measurement.shoulder}
-        />
-
-        <MeasurementRow
-          label="Chest / Bust"
-          value={measurement.chest}
-        />
-
-        <MeasurementRow
-          label="Waist"
-          value={measurement.waist}
-        />
-
-        <MeasurementRow
-          label="Sleeve Length"
-          value={measurement.sleeve_length}
-        />
-
-        <MeasurementRow
-          label="Top Length"
-          value={measurement.top_length}
-        />
-
-        <Text style={styles.groupTitle}>
-          Lower Body
-        </Text>
-
-        <MeasurementRow
-          label="Hips"
-          value={measurement.hips}
-        />
-
-        <MeasurementRow
-          label="Inseam"
-          value={measurement.inseam}
-        />
-
-        <MeasurementRow
-          label="Bottom Length"
-          value={measurement.bottom_length}
-        />
-
-        <TouchableOpacity
-          style={styles.editButton}
-          onPress={() => navigation.navigate('EditMeasurements')}
-          disabled={loading}
-        >
-          <Text style={styles.editButtonText}>
-            Edit My Measurements
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>
+            Reference Image
           </Text>
-        </TouchableOpacity>
-      </View>
 
-      {/* WHAT HAPPENS NEXT */}
+          {loadingImage ? (
+            <View
+              style={[
+                styles.imageLoading,
+                { height: imageHeight },
+              ]}
+            >
+              <ActivityIndicator color="#D96B8A" />
 
-      <View style={styles.notice}>
-        <View style={styles.noticeHeader}>
-          <Ionicons
-            name="information-circle-outline"
-            size={20}
-            color="#A63D65"
-          />
+              <Text style={styles.noImageText}>
+                Loading reference image...
+              </Text>
+            </View>
+          ) : imageUrl ? (
+            <Image
+              source={{ uri: imageUrl }}
+              style={[
+                styles.referenceImage,
+                { height: imageHeight },
+              ]}
+              resizeMode="contain"
+              onError={() => setImageUrl(null)}
+              accessibilityLabel="Custom garment reference image"
+            />
+          ) : (
+            <View
+              style={[
+                styles.noImage,
+                { height: imageHeight },
+              ]}
+            >
+              <Ionicons
+                name="image-outline"
+                size={32}
+                color="#C9AAB5"
+              />
 
-          <Text style={styles.noticeTitle}>
-            What Happens Next?
+              <Text style={styles.noImageText}>
+                No reference image available
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* GARMENT DETAILS */}
+
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>
+            Garment Details
+          </Text>
+
+          <Text style={styles.label}>
+            Description
+          </Text>
+
+          <Text style={styles.value}>
+            {customOrderData.garmentDescription || 'Not provided'}
+          </Text>
+
+          <Text style={styles.label}>
+            Preferred Color
+          </Text>
+
+          <Text style={styles.value}>
+            {customOrderData.preferredColor || 'Not specified'}
+          </Text>
+
+          <Text style={styles.label}>
+            Fabric Preference
+          </Text>
+
+          <Text style={styles.value}>
+            {customOrderData.fabricPreference || 'Not specified'}
+          </Text>
+
+          <Text style={styles.label}>
+            Needed By
+          </Text>
+
+          <Text style={styles.value}>
+            {formatDate(customOrderData.neededByDate)}
+          </Text>
+
+          <Text style={styles.label}>
+            Special Instructions
+          </Text>
+
+          <Text style={styles.value}>
+            {customOrderData.specialInstructions || 'None'}
           </Text>
         </View>
 
-        <Text style={styles.noticeText}>
-          1. Staff reviews your custom order and measurements.
-        </Text>
+        {/* MEASUREMENTS */}
 
-        <Text style={styles.noticeText}>
-          2. Staff prepares a quotation for your approval.
-        </Text>
-
-        <Text style={styles.noticeText}>
-          3. You accept or reject the quotation.
-        </Text>
-
-        <Text style={styles.noticeText}>
-          4. After accepting, you pay the deposit online through GCash or PayPal.
-        </Text>
-
-        <Text style={styles.noticeText}>
-          5. The remaining balance is paid in cash when you pick up your garment.
-        </Text>
-      </View>
-
-      {/* SUBMIT BUTTON */}
-
-      <TouchableOpacity
-        style={[
-          styles.submitButton,
-          loading && styles.disabledButton,
-        ]}
-        onPress={handleSubmit}
-        disabled={loading}
-      >
-        {loading ? (
-          <ActivityIndicator color="#FFFFFF" />
-        ) : (
-          <Text style={styles.submitButtonText}>
-            Submit Custom Order
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>
+            Your Measurements
           </Text>
-        )}
-      </TouchableOpacity>
 
-      {/* BACK BUTTON */}
+          <Text style={styles.groupTitle}>
+            Upper Body
+          </Text>
 
-      <TouchableOpacity
-        style={styles.backButton}
-        onPress={() => navigation.goBack()}
-        disabled={loading}
-      >
-        <Text style={styles.backButtonText}>
-          Go Back
-        </Text>
-      </TouchableOpacity>
+          <MeasurementRow
+            label="Shoulder"
+            value={measurement.shoulder}
+          />
+
+          <MeasurementRow
+            label="Chest / Bust"
+            value={measurement.chest}
+          />
+
+          <MeasurementRow
+            label="Waist"
+            value={measurement.waist}
+          />
+
+          <MeasurementRow
+            label="Sleeve Length"
+            value={measurement.sleeve_length}
+          />
+
+          <MeasurementRow
+            label="Top Length"
+            value={measurement.top_length}
+          />
+
+          <Text style={styles.groupTitle}>
+            Lower Body
+          </Text>
+
+          <MeasurementRow
+            label="Hips"
+            value={measurement.hips}
+          />
+
+          <MeasurementRow
+            label="Inseam"
+            value={measurement.inseam}
+          />
+
+          <MeasurementRow
+            label="Bottom Length"
+            value={measurement.bottom_length}
+          />
+
+          <TouchableOpacity
+            style={styles.editButton}
+            onPress={() => navigation.navigate('EditMeasurements')}
+            disabled={loading}
+            accessibilityRole="button"
+            accessibilityLabel="Edit my measurements"
+          >
+            <Ionicons
+              name="create-outline"
+              size={17}
+              color="#D96B8A"
+            />
+
+            <Text style={styles.editButtonText}>
+              Edit My Measurements
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* WHAT HAPPENS NEXT */}
+
+        <View style={styles.notice}>
+          <View style={styles.noticeHeader}>
+            <Ionicons
+              name="information-circle-outline"
+              size={20}
+              color="#A63D65"
+            />
+
+            <Text style={styles.noticeTitle}>
+              What Happens Next?
+            </Text>
+          </View>
+
+          <Text style={styles.noticeText}>
+            1. Staff reviews your custom order and measurements.
+          </Text>
+
+          <Text style={styles.noticeText}>
+            2. Staff prepares a quotation for your approval.
+          </Text>
+
+          <Text style={styles.noticeText}>
+            3. You accept or reject the quotation.
+          </Text>
+
+          <Text style={styles.noticeText}>
+            4. After accepting, you pay the deposit online through GCash or PayPal.
+          </Text>
+
+          <Text style={styles.noticeText}>
+            5. The remaining balance is paid in cash when you pick up your garment.
+          </Text>
+        </View>
+
+        {/* SUBMIT BUTTON */}
+
+        <TouchableOpacity
+          style={[
+            styles.submitButton,
+            loading && styles.disabledButton,
+          ]}
+          onPress={handleSubmit}
+          disabled={loading}
+          accessibilityRole="button"
+          accessibilityLabel="Submit custom order"
+          accessibilityState={{ disabled: loading }}
+        >
+          {loading ? (
+            <View style={styles.loadingButtonContent}>
+              <ActivityIndicator color="#FFFFFF" />
+
+              <Text style={styles.submitButtonText}>
+                Submitting...
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.submitButtonText}>
+              Submit Custom Order
+            </Text>
+          )}
+        </TouchableOpacity>
+
+        {/* BACK BUTTON */}
+
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+          disabled={loading}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
+          <Text style={styles.backButtonText}>
+            Go Back
+          </Text>
+        </TouchableOpacity>
+      </View>
     </ScrollView>
   );
 }
@@ -514,8 +577,15 @@ const styles = StyleSheet.create({
   },
 
   content: {
-    padding: 18,
+    paddingTop: 20,
     paddingBottom: 35,
+    width: '100%',
+    alignItems: 'center',
+  },
+
+  innerContent: {
+    width: '100%',
+    maxWidth: 760,
   },
 
   title: {
@@ -550,13 +620,11 @@ const styles = StyleSheet.create({
 
   referenceImage: {
     width: '100%',
-    height: 220,
     borderRadius: 10,
     backgroundColor: '#FFF8FA',
   },
 
   imageLoading: {
-    height: 120,
     justifyContent: 'center',
     alignItems: 'center',
     gap: 10,
@@ -565,9 +633,9 @@ const styles = StyleSheet.create({
   },
 
   noImage: {
-    height: 100,
     justifyContent: 'center',
     alignItems: 'center',
+    gap: 8,
     backgroundColor: '#FFF8FA',
     borderRadius: 10,
   },
@@ -575,6 +643,7 @@ const styles = StyleSheet.create({
   noImageText: {
     color: '#999',
     fontSize: 13,
+    textAlign: 'center',
   },
 
   label: {
@@ -602,7 +671,10 @@ const styles = StyleSheet.create({
   measurementRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: 10,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingVertical: 11,
     borderBottomWidth: 1,
     borderBottomColor: '#F5E9ED',
   },
@@ -610,12 +682,15 @@ const styles = StyleSheet.create({
   measurementLabel: {
     fontSize: 13,
     color: '#765563',
+    flexShrink: 1,
   },
 
   measurementValue: {
     fontSize: 13,
     fontWeight: '700',
     color: '#3F2630',
+    textAlign: 'right',
+    flexShrink: 0,
   },
 
   editButton: {
@@ -625,6 +700,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#D96B8A',
     alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 7,
   },
 
   editButtonText: {
@@ -665,10 +743,19 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 12,
     alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 52,
   },
 
   disabledButton: {
     opacity: 0.6,
+  },
+
+  loadingButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
   },
 
   submitButtonText: {

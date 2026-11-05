@@ -9,7 +9,6 @@ import {
   Text,
   TouchableOpacity,
   View,
-  useWindowDimensions,
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
@@ -21,6 +20,13 @@ type Props = NativeStackScreenProps<
   RootStackParamList,
   'Notifications'
 >;
+
+type OrderType = 'catalog' | 'custom';
+
+type OrderTarget = {
+  orderId: string;
+  orderType: OrderType;
+};
 
 type Notification = {
   id: string;
@@ -50,13 +56,12 @@ const COLORS = {
 };
 
 export default function NotificationsScreen({ navigation }: Props) {
-  const { width } = useWindowDimensions();
 
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-
-  const compact = width < 360;
+  const [openingId, setOpeningId] = useState<string | null>(null);
+  const [markingAll, setMarkingAll] = useState(false);
 
   const loadNotifications = useCallback(async () => {
     try {
@@ -93,7 +98,7 @@ export default function NotificationsScreen({ navigation }: Props) {
 
       if (error) throw error;
 
-      setNotifications(data ?? []);
+      setNotifications((data ?? []) as Notification[]);
     } catch (error) {
       console.error('Notification loading error:', error);
       Alert.alert(
@@ -109,13 +114,13 @@ export default function NotificationsScreen({ navigation }: Props) {
   useFocusEffect(
     useCallback(() => {
       setLoading(true);
-      loadNotifications();
+      void loadNotifications();
     }, [loadNotifications])
   );
 
   const onRefresh = () => {
     setRefreshing(true);
-    loadNotifications();
+    void loadNotifications();
   };
 
   const markAsRead = async (notification: Notification) => {
@@ -133,7 +138,7 @@ export default function NotificationsScreen({ navigation }: Props) {
 
     if (error) {
       console.error('Mark notification read error:', error);
-      return;
+      throw error;
     }
 
     setNotifications((current) =>
@@ -146,13 +151,17 @@ export default function NotificationsScreen({ navigation }: Props) {
   };
 
   const markAllAsRead = async () => {
-    if (unreadCount === 0) return;
+    if (unreadCount === 0 || markingAll) return;
+
+    setMarkingAll(true);
 
     try {
       const {
         data: { user },
+        error: userError,
       } = await supabase.auth.getUser();
 
+      if (userError) throw userError;
       if (!user) return;
 
       const readAt = new Date().toISOString();
@@ -172,7 +181,7 @@ export default function NotificationsScreen({ navigation }: Props) {
         current.map((item) => ({
           ...item,
           is_read: true,
-          read_at: readAt,
+          read_at: item.is_read ? item.read_at : readAt,
         }))
       );
     } catch (error) {
@@ -181,6 +190,8 @@ export default function NotificationsScreen({ navigation }: Props) {
         'Unable to update notifications',
         'Please try again.'
       );
+    } finally {
+      setMarkingAll(false);
     }
   };
 
@@ -214,11 +225,137 @@ export default function NotificationsScreen({ navigation }: Props) {
     });
   };
 
-  const openNotification = async (notification: Notification) => {
-    await markAsRead(notification);
+  // Resolve the order directly from the notification first.
+  // If the notification only has a payment or production reference,
+  // retrieve the related order from Supabase.
+  const resolveOrderTarget = async (
+    notification: Notification
+  ): Promise<OrderTarget | null> => {
+    if (notification.custom_order_id) {
+      return {
+        orderId: notification.custom_order_id,
+        orderType: 'custom',
+      };
+    }
 
-    // Notification detail navigation can be connected
-    // to the corresponding order screen separately.
+    if (notification.order_id) {
+      return {
+        orderId: notification.order_id,
+        orderType: 'catalog',
+      };
+    }
+
+    // Payment notifications may contain only payment_id.
+    if (notification.payment_id) {
+      const { data: payment, error } = await supabase
+        .from('payments')
+        .select('order_id, custom_order_id')
+        .eq('id', notification.payment_id)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (payment?.custom_order_id) {
+        return {
+          orderId: payment.custom_order_id,
+          orderType: 'custom',
+        };
+      }
+
+      if (payment?.order_id) {
+        return {
+          orderId: payment.order_id,
+          orderType: 'catalog',
+        };
+      }
+    }
+
+    // Production notifications may contain only production_tracking_id.
+    if (notification.production_tracking_id) {
+      const { data: production, error } = await supabase
+        .from('production_tracking')
+        .select('order_id, custom_order_id')
+        .eq('id', notification.production_tracking_id)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (production?.custom_order_id) {
+        return {
+          orderId: production.custom_order_id,
+          orderType: 'custom',
+        };
+      }
+
+      if (production?.order_id) {
+        return {
+          orderId: production.order_id,
+          orderType: 'catalog',
+        };
+      }
+    }
+
+    return null;
+  };
+
+  const openNotification = async (notification: Notification) => {
+    if (openingId) return;
+
+    setOpeningId(notification.id);
+
+    try {
+      // Mark the notification as read before navigating.
+      await markAsRead(notification);
+
+      const target = await resolveOrderTarget(notification);
+
+      // Notifications without an associated order are simply marked read.
+      if (!target) {
+        return;
+      }
+
+      // Determine whether the logged-in user is staff or customer.
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) throw userError;
+
+      if (!user) {
+        throw new Error('Please log in again.');
+      }
+
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (profileError) throw profileError;
+
+      const role = String(profile?.role ?? '').toLowerCase();
+
+      if (role === 'staff') {
+        navigation.navigate('ManageOrder', target);
+      } else if (role === 'customer') {
+        navigation.navigate('OrderDetails', target);
+      } else {
+        throw new Error(
+          'Unable to determine your account role. Please try again.'
+        );
+      }
+    } catch (error: any) {
+      console.error('Open notification error:', error);
+
+      Alert.alert(
+        'Unable to Open Notification',
+        error?.message ??
+          'The related order could not be opened. Please try again.'
+      );
+    } finally {
+      setOpeningId(null);
+    }
   };
 
   const unreadCount = notifications.filter(
@@ -241,18 +378,25 @@ export default function NotificationsScreen({ navigation }: Props) {
 
         <TouchableOpacity
           onPress={markAllAsRead}
-          disabled={unreadCount === 0}
+          disabled={unreadCount === 0 || markingAll}
           activeOpacity={0.7}
           style={styles.readAllButton}
         >
-          <Text
-            style={[
-              styles.markAll,
-              unreadCount === 0 && styles.markAllDisabled,
-            ]}
-          >
-            Read all
-          </Text>
+          {markingAll ? (
+            <ActivityIndicator
+              size="small"
+              color={COLORS.rose}
+            />
+          ) : (
+            <Text
+              style={[
+                styles.markAll,
+                unreadCount === 0 && styles.markAllDisabled,
+              ]}
+            >
+              Read all
+            </Text>
+          )}
         </TouchableOpacity>
       </View>
 
@@ -309,8 +453,10 @@ export default function NotificationsScreen({ navigation }: Props) {
               style={[
                 styles.notificationCard,
                 !notification.is_read && styles.unreadCard,
+                openingId === notification.id && styles.openingCard,
               ]}
               onPress={() => openNotification(notification)}
+              disabled={openingId !== null}
             >
               <View style={styles.notificationContent}>
                 <View style={styles.titleRow}>
@@ -343,6 +489,19 @@ export default function NotificationsScreen({ navigation }: Props) {
                     </Text>
                   )}
                 </View>
+
+                {openingId === notification.id && (
+                  <View style={styles.openingIndicator}>
+                    <ActivityIndicator
+                      size="small"
+                      color={COLORS.rose}
+                    />
+
+                    <Text style={styles.openingText}>
+                      Opening...
+                    </Text>
+                  </View>
+                )}
               </View>
             </TouchableOpacity>
           ))}
@@ -390,6 +549,8 @@ const styles = StyleSheet.create({
   readAllButton: {
     paddingVertical: 9,
     paddingLeft: 8,
+    minWidth: 55,
+    alignItems: 'center',
   },
 
   markAll: {
@@ -445,6 +606,10 @@ const styles = StyleSheet.create({
   unreadCard: {
     backgroundColor: COLORS.blush,
     borderColor: COLORS.blushDeep,
+  },
+
+  openingCard: {
+    opacity: 0.7,
   },
 
   notificationContent: {
@@ -506,6 +671,19 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '800',
     letterSpacing: 0.5,
+  },
+
+  openingIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    gap: 7,
+  },
+
+  openingText: {
+    color: COLORS.rose,
+    fontSize: 11,
+    fontWeight: '600',
   },
 
   center: {

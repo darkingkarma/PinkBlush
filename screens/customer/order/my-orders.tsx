@@ -1,4 +1,3 @@
-
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -13,7 +12,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import { supabase } from '../../../supabase';
@@ -55,6 +54,7 @@ type CustomOrder = {
   garment_description: string;
   status: string;
   quoted_price: number | string | null;
+  deposit_amount: number | string | null;
   estimated_completion_date: string | null;
   created_at: string;
   signedImageUrl?: string | null;
@@ -342,22 +342,6 @@ const getStatusGroup = (status: string): StatusFilter => {
     return 'in_progress';
   }
 
-  if (
-    [
-      'pending',
-      'submitted',
-      'under_review',
-      'quoted',
-      'quotation_sent',
-      'accepted',
-      'measurements_pending',
-      'awaiting_deposit',
-      'deposit_paid',
-    ].includes(normalized)
-  ) {
-    return 'pending';
-  }
-
   return 'pending';
 };
 
@@ -367,9 +351,7 @@ const matchesCustomStatus = (
 ): boolean => {
   const normalized = actualStatus.toLowerCase();
 
-  if (selectedStatus === 'all') {
-    return true;
-  }
+  if (selectedStatus === 'all') return true;
 
   if (selectedStatus === 'quotation_sent') {
     return ['quotation_sent', 'quoted'].includes(normalized);
@@ -385,10 +367,6 @@ const matchesCatalogStatus = (
   const normalized = actualStatus.toLowerCase();
 
   if (selectedStatus === 'all') return true;
-
-  if (selectedStatus === 'pending') {
-    return normalized === 'pending';
-  }
 
   return normalized === selectedStatus;
 };
@@ -447,7 +425,7 @@ export default function MyOrdersScreen() {
         supabase
           .from('custom_orders')
           .select(
-            'id, reference_image_url, garment_description, status, quoted_price, estimated_completion_date, created_at',
+            'id, reference_image_url, garment_description, status, quoted_price, deposit_amount, estimated_completion_date, created_at',
           )
           .eq('user_id', user.id)
           .order('created_at', { ascending: false }),
@@ -628,6 +606,8 @@ export default function MyOrdersScreen() {
 
             const currentStatus = depositPaymentStatuses[orderId];
 
+            // Keep the newest paid payment, or the newest payment
+            // if there is no paid payment for this order yet.
             if (
               !depositPaymentIds[orderId] ||
               (paymentStatus === 'paid' && currentStatus !== 'paid')
@@ -792,20 +772,36 @@ export default function MyOrdersScreen() {
     }
   }, []);
 
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true);
+  // Refresh whenever the customer returns to this screen.
+  // This also refreshes payment status after returning from Payment.
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
 
-      try {
-        await fetchOrders();
-      } finally {
-        setLoading(false);
-      }
-    };
+      const loadOrders = async () => {
+        if (orders.length === 0) {
+          setLoading(true);
+        }
 
-    void load();
-  }, [fetchOrders]);
+        try {
+          await fetchOrders();
+        } finally {
+          if (isActive) {
+            setLoading(false);
+          }
+        }
+      };
 
+      void loadOrders();
+
+      return () => {
+        isActive = false;
+      };
+    }, [fetchOrders, orders.length]),
+  );
+
+  // Realtime updates for order records.
+  // Payment status is refreshed on screen focus and pull-to-refresh.
   useEffect(() => {
     let isActive = true;
     let channel: ReturnType<typeof supabase.channel> | null = null;
@@ -852,18 +848,6 @@ export default function MyOrdersScreen() {
               event: '*',
               schema: 'public',
               table: 'orders',
-              filter: `customer_id=eq.${user.id}`,
-            },
-            () => {
-              if (isActive) void fetchOrders();
-            },
-          )
-          .on(
-            'postgres_changes',
-            {
-              event: '*',
-              schema: 'public',
-              table: 'payments',
               filter: `customer_id=eq.${user.id}`,
             },
             () => {
@@ -995,14 +979,26 @@ export default function MyOrdersScreen() {
   const renderCustomOrder = (order: CustomOrder) => {
     const status = order.status.toLowerCase();
     const quotedPrice = Number(order.quoted_price);
+    const depositAmount = Number(order.deposit_amount);
 
     const hasQuote =
       order.quoted_price !== null &&
       order.quoted_price !== '' &&
       Number.isFinite(quotedPrice);
 
+    const hasDepositAmount =
+      order.deposit_amount !== null &&
+      order.deposit_amount !== '' &&
+      Number.isFinite(depositAmount) &&
+      depositAmount > 0;
+
     const canReviewQuotation =
       ['quoted', 'quotation_sent'].includes(status) && hasQuote;
+
+    const canPayDeposit =
+      status === 'accepted' &&
+      hasDepositAmount &&
+      order.depositPaymentStatus !== 'paid';
 
     return (
       <>
@@ -1018,13 +1014,19 @@ export default function MyOrdersScreen() {
 
             {hasQuote ? (
               <Text style={styles.priceText}>
-                {formatPrice(order.quoted_price)}
+                Quotation: {formatPrice(order.quoted_price)}
               </Text>
             ) : (
               <Text style={styles.pendingPrice}>
                 Waiting for quotation
               </Text>
             )}
+
+            {hasDepositAmount ? (
+              <Text style={styles.depositText}>
+                Deposit: {formatPrice(order.deposit_amount)}
+              </Text>
+            ) : null}
 
             {order.estimated_completion_date &&
             !['declined', 'cancelled'].includes(status) ? (
@@ -1105,14 +1107,14 @@ export default function MyOrdersScreen() {
             <Text style={styles.receiptButtonText}>View Receipt</Text>
             <Text style={styles.buttonArrow}>›</Text>
           </TouchableOpacity>
-        ) : status === 'accepted' ? (
+        ) : canPayDeposit ? (
           <TouchableOpacity
             style={styles.receiptButton}
             onPress={() =>
               navigation.navigate('Payment', {
                 orderId: order.id,
                 orderType: 'custom',
-                totalAmount: Number(order.quoted_price),
+                totalAmount: depositAmount,
               })
             }
             activeOpacity={0.8}
@@ -1126,6 +1128,10 @@ export default function MyOrdersScreen() {
             </Text>
             <Text style={styles.buttonArrow}>›</Text>
           </TouchableOpacity>
+        ) : status === 'accepted' && !hasDepositAmount ? (
+          <Text style={styles.paymentNotice}>
+            Deposit amount is not available yet. Please contact the staff.
+          </Text>
         ) : null}
       </>
     );
@@ -1133,6 +1139,12 @@ export default function MyOrdersScreen() {
 
   const renderCatalogOrder = (order: CatalogOrder) => {
     const firstItem = order.items[0];
+    const catalogStatus = order.status.toLowerCase();
+
+    // Catalog deposit payments are only allowed while the order is pending.
+    const canPayCatalogDeposit =
+      catalogStatus === 'pending' &&
+      order.depositPaymentStatus !== 'paid';
 
     return (
       <>
@@ -1233,9 +1245,7 @@ export default function MyOrdersScreen() {
             <Text style={styles.receiptButtonText}>View Receipt</Text>
             <Text style={styles.buttonArrow}>›</Text>
           </TouchableOpacity>
-        ) : !['cancelled', 'completed'].includes(
-            order.status.toLowerCase(),
-          ) ? (
+        ) : canPayCatalogDeposit ? (
           <TouchableOpacity
             style={styles.receiptButton}
             onPress={() =>
@@ -1763,11 +1773,24 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginTop: 7,
   },
+  depositText: {
+    color: '#237A4B',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 5,
+  },
   pendingPrice: {
     color: '#946200',
     fontSize: 12,
     fontWeight: '600',
     marginTop: 7,
+  },
+  paymentNotice: {
+    color: '#946200',
+    fontSize: 11,
+    lineHeight: 17,
+    marginTop: 9,
+    textAlign: 'center',
   },
   productImageContainer: {
     borderRadius: 12,

@@ -1,3 +1,4 @@
+
 import { useState } from 'react';
 
 import {
@@ -12,9 +13,9 @@ import {
   useWindowDimensions,
 } from 'react-native';
 
-import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import { RootStackParamList } from '../../../navigator';
+import type { RootStackParamList } from '../../../navigator';
 
 import { supabase } from '../../../supabase';
 
@@ -33,19 +34,31 @@ export default function ReviewOrderScreen({
 
   const [submitting, setSubmitting] = useState(false);
 
-  const formatPrice = (value: number) => {
-    return `₱${Number(value || 0).toFixed(2)}`;
-  };
+  const isSmallScreen = width < 360;
+
+  const items = Array.isArray(orderData?.items)
+    ? orderData.items
+    : [];
 
   const totalAmount = Number(orderData?.totalAmount || 0);
 
-  const depositAmount =
-    Math.round(totalAmount * 50) / 100;
+  const depositAmount = Number(
+    (Math.round(totalAmount * 0.5 * 100) / 100).toFixed(2)
+  );
 
-  const remainingBalance =
-    totalAmount - depositAmount;
+  const remainingBalance = Number(
+    (totalAmount - depositAmount).toFixed(2)
+  );
 
-  const isSmallScreen = width < 360;
+  const formatPrice = (value: number | string) => {
+    return `₱${Number(value || 0).toFixed(2)}`;
+  };
+
+  const editMeasurements = () => {
+    navigation.navigate('OrderMeasurements', {
+      orderData: orderData,
+    });
+  };
 
   const handleSubmitOrder = async () => {
     if (submitting) return;
@@ -53,8 +66,7 @@ export default function ReviewOrderScreen({
     if (
       !orderData ||
       !orderData.garment?.id ||
-      !orderData.items ||
-      orderData.items.length === 0
+      items.length === 0
     ) {
       Alert.alert(
         'Invalid Order',
@@ -71,6 +83,7 @@ export default function ReviewOrderScreen({
       return;
     }
 
+    // Validate all required measurements.
     const requiredMeasurements = [
       measurement.shoulder,
       measurement.chest,
@@ -109,6 +122,7 @@ export default function ReviewOrderScreen({
       return;
     }
 
+    // Validate total amount.
     if (
       !Number.isFinite(totalAmount) ||
       totalAmount <= 0
@@ -120,28 +134,41 @@ export default function ReviewOrderScreen({
       return;
     }
 
-    const invalidItem = orderData.items.some(
-      (item: any) =>
+    // Validate selected items.
+    const invalidItem = items.some((item: any) => {
+      const quantity = Number(item.quantity);
+      const unitPrice = Number(item.unitPrice);
+      const subtotal = Number(item.subtotal);
+
+      const expectedSubtotal = Number(
+        (quantity * unitPrice).toFixed(2)
+      );
+
+      return (
         !item.partId ||
         !item.designId ||
         !item.fabricId ||
-        !Number.isFinite(Number(item.quantity)) ||
-        Number(item.quantity) <= 0 ||
-        !Number.isFinite(Number(item.unitPrice)) ||
-        Number(item.unitPrice) < 0 ||
-        !Number.isFinite(Number(item.subtotal)) ||
-        Number(item.subtotal) < 0
-    );
+        !Number.isFinite(quantity) ||
+        !Number.isInteger(quantity) ||
+        quantity <= 0 ||
+        !Number.isFinite(unitPrice) ||
+        unitPrice < 0 ||
+        !Number.isFinite(subtotal) ||
+        subtotal < 0 ||
+        Math.abs(subtotal - expectedSubtotal) > 0.01
+      );
+    });
 
     if (invalidItem) {
       Alert.alert(
         'Incomplete Order',
-        'One or more garment parts have missing design, fabric, quantity, or price information.'
+        'One or more garment parts have missing information or an incorrect quantity or subtotal. Please review your selections.'
       );
       return;
     }
 
-    const calculatedTotal = orderData.items.reduce(
+    // Validate the overall order total.
+    const calculatedTotal = items.reduce(
       (sum: number, item: any) =>
         sum + Number(item.subtotal),
       0
@@ -195,7 +222,7 @@ export default function ReviewOrderScreen({
       }
 
       // 1. Create catalog order.
-      // Save a snapshot of the customer's measurements.
+      // Measurement values remain in centimeters (cm).
       const {
         data: order,
         error: orderError,
@@ -235,18 +262,16 @@ export default function ReviewOrderScreen({
       }
 
       // 2. Save selected garment parts and options.
-      const orderItems = orderData.items.map(
-        (item: any) => ({
-          order_id: order.id,
-          garment_id: orderData.garment.id,
-          garment_part_id: item.partId,
-          design_id: item.designId,
-          fabric_id: item.fabricId,
-          quantity: Number(item.quantity),
-          unit_price: Number(item.unitPrice),
-          subtotal: Number(item.subtotal),
-        })
-      );
+      const orderItems = items.map((item: any) => ({
+        order_id: order.id,
+        garment_id: orderData.garment.id,
+        garment_part_id: item.partId,
+        design_id: item.designId,
+        fabric_id: item.fabricId,
+        quantity: Number(item.quantity),
+        unit_price: Number(item.unitPrice),
+        subtotal: Number(item.subtotal),
+      }));
 
       const {
         error: itemsError,
@@ -312,275 +337,275 @@ export default function ReviewOrderScreen({
     }
   };
 
-  // Return to the measurement step if the customer
-  // wants to change their measurements.
-  const editMeasurements = () => {
-    navigation.navigate('OrderMeasurements', {
-      orderData: orderData,
-    });
-  };
-
   return (
     <View style={styles.container}>
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[
-          styles.content,
-          {
-            paddingHorizontal: isSmallScreen ? 14 : 20,
-          },
-        ]}
+        contentContainerStyle={styles.scrollContent}
       >
-        {/* HEADER */}
-        <View style={styles.header}>
-          <Text style={styles.title}>
-            Review Order
-          </Text>
-
-          <Text style={styles.subtitle}>
-            Check your order details before confirming.
-          </Text>
-        </View>
-
-        {/* GARMENT */}
-        <View style={styles.garmentHeader}>
-          <Text style={styles.garmentLabel}>
-            SELECTED GARMENT
-          </Text>
-
-          <Text style={styles.garmentName}>
-            {orderData.garment.name}
-          </Text>
-        </View>
-
-        {/* SELECTED PARTS */}
-        <Text style={styles.sectionTitle}>
-          Order Items
-        </Text>
-
-        {orderData.items.map((item: any, index: number) => (
-          <View
-            key={`${item.partId}-${index}`}
-            style={styles.card}
-          >
-            <Text style={styles.partName}>
-              {item.partName}
+        <View
+          style={[
+            styles.innerContent,
+            {
+              paddingHorizontal: isSmallScreen ? 14 : 20,
+            },
+          ]}
+        >
+          {/* HEADER */}
+          <View style={styles.header}>
+            <Text style={styles.title}>
+              Review Order
             </Text>
 
-            <View style={styles.divider} />
+            <Text style={styles.subtitle}>
+              Check your order details before confirming.
+            </Text>
+          </View>
 
-            {/* DESIGN */}
-            <Text style={styles.detailLabel}>
-              Selected Design
+          {/* GARMENT */}
+          <View style={styles.garmentHeader}>
+            <Text style={styles.garmentLabel}>
+              SELECTED GARMENT
             </Text>
 
-            <DesignPreview
-              imageUrl={item.designImage}
+            <Text style={styles.garmentName}>
+              {orderData?.garment?.name || 'Garment'}
+            </Text>
+          </View>
+
+          {/* SELECTED PARTS */}
+          <Text style={styles.sectionTitle}>
+            Order Items
+          </Text>
+
+          {items.map((item: any, index: number) => (
+            <View
+              key={`${item.partId || 'part'}-${index}`}
+              style={styles.card}
+            >
+              <Text style={styles.partName}>
+                {item.partName || 'Garment Part'}
+              </Text>
+
+              <View style={styles.divider} />
+
+              {/* DESIGN */}
+              <Text style={styles.detailLabel}>
+                Selected Design
+              </Text>
+
+              <DesignPreview
+                imageUrl={item.designImage}
+              />
+
+              <Text style={styles.designName}>
+                {item.designName || 'No design selected'}
+              </Text>
+
+              {/* FABRIC */}
+              <View style={styles.detailGroup}>
+                <Text style={styles.detailLabel}>
+                  Selected Fabric
+                </Text>
+
+                <Text style={styles.detailValue}>
+                  {item.fabricName || 'None selected'}
+                </Text>
+              </View>
+
+              {/* QUANTITY AND PRICE */}
+              <View style={styles.priceDetails}>
+                <View style={styles.priceRow}>
+                  <Text style={styles.detailText}>
+                    Quantity
+                  </Text>
+
+                  <Text style={styles.detailValue}>
+                    {item.quantity}
+                  </Text>
+                </View>
+
+                <View style={styles.priceRow}>
+                  <Text style={styles.detailText}>
+                    Unit Price
+                  </Text>
+
+                  <Text style={styles.detailValue}>
+                    {formatPrice(item.unitPrice)}
+                  </Text>
+                </View>
+              </View>
+
+              {/* SUBTOTAL */}
+              <View style={styles.subtotalRow}>
+                <Text style={styles.subtotalLabel}>
+                  Subtotal
+                </Text>
+
+                <Text style={styles.subtotal}>
+                  {formatPrice(item.subtotal)}
+                </Text>
+              </View>
+            </View>
+          ))}
+
+          {/* MEASUREMENTS */}
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>
+              Your Measurements
+            </Text>
+
+            <TouchableOpacity
+              onPress={editMeasurements}
+              disabled={submitting}
+              accessibilityRole="button"
+              accessibilityLabel="Edit measurements"
+            >
+              <Text style={styles.editText}>
+                EDIT
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.card}>
+            <Text style={styles.measurementCategory}>
+              Upper Body
+            </Text>
+
+            <MeasurementRow
+              title="Shoulder"
+              value={measurement?.shoulder}
             />
 
-            <Text style={styles.designName}>
-              {item.designName || 'No design selected'}
+            <MeasurementRow
+              title="Chest / Bust"
+              value={measurement?.chest}
+            />
+
+            <MeasurementRow
+              title="Waist"
+              value={measurement?.waist}
+            />
+
+            <MeasurementRow
+              title="Sleeve Length"
+              value={measurement?.sleeve_length}
+            />
+
+            <MeasurementRow
+              title="Top Length"
+              value={measurement?.top_length}
+            />
+
+            <View style={styles.measurementDivider} />
+
+            <Text style={styles.measurementCategory}>
+              Lower Body
             </Text>
 
-            {/* FABRIC */}
-            <View style={styles.detailGroup}>
-              <Text style={styles.detailLabel}>
-                Selected Fabric
-              </Text>
+            <MeasurementRow
+              title="Hips"
+              value={measurement?.hips}
+            />
 
-              <Text style={styles.detailValue}>
-                {item.fabricName || 'None selected'}
-              </Text>
-            </View>
+            <MeasurementRow
+              title="Inseam"
+              value={measurement?.inseam}
+            />
 
-            {/* QUANTITY AND PRICE */}
-            <View style={styles.priceDetails}>
-              <View style={styles.priceRow}>
-                <Text style={styles.detailText}>
-                  Quantity
-                </Text>
-
-                <Text style={styles.detailValue}>
-                  {item.quantity}
-                </Text>
-              </View>
-
-              <View style={styles.priceRow}>
-                <Text style={styles.detailText}>
-                  Unit Price
-                </Text>
-
-                <Text style={styles.detailValue}>
-                  {formatPrice(item.unitPrice)}
-                </Text>
-              </View>
-            </View>
-
-            {/* SUBTOTAL */}
-            <View style={styles.subtotalRow}>
-              <Text style={styles.subtotalLabel}>
-                Subtotal
-              </Text>
-
-              <Text style={styles.subtotal}>
-                {formatPrice(item.subtotal)}
-              </Text>
-            </View>
+            <MeasurementRow
+              title="Bottom Length"
+              value={measurement?.bottom_length}
+            />
           </View>
-        ))}
 
-        {/* MEASUREMENTS */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>
-            Your Measurements
-          </Text>
+          {/* ORDER TOTAL */}
+          <View style={styles.totalBox}>
+            <Text style={styles.totalLabel}>
+              Order Total
+            </Text>
 
+            <Text style={styles.totalAmount}>
+              {formatPrice(totalAmount)}
+            </Text>
+          </View>
+
+          {/* PAYMENT SUMMARY */}
+          <View style={styles.depositBox}>
+            <Text style={styles.depositTitle}>
+              Payment Summary
+            </Text>
+
+            <View style={styles.paymentRow}>
+              <View style={styles.paymentDescription}>
+                <Text style={styles.paymentLabel}>
+                  Required Deposit (50%)
+                </Text>
+
+                <Text style={styles.paymentMethod}>
+                  Online payment · GCash / PayPal
+                </Text>
+              </View>
+
+              <Text style={styles.depositAmount}>
+                {formatPrice(depositAmount)}
+              </Text>
+            </View>
+
+            <View style={styles.paymentRow}>
+              <View style={styles.paymentDescription}>
+                <Text style={styles.paymentLabel}>
+                  Remaining Balance (50%)
+                </Text>
+
+                <Text style={styles.paymentMethod}>
+                  Cash payment · At pickup
+                </Text>
+              </View>
+
+              <Text style={styles.balanceAmount}>
+                {formatPrice(remainingBalance)}
+              </Text>
+            </View>
+
+            <View style={styles.depositDivider} />
+
+            <Text style={styles.depositNote}>
+              Pay your 50% deposit online to proceed with your order. The remaining balance must be paid in cash when you pick up your finished garment.
+            </Text>
+          </View>
+
+          {/* CONFIRM BUTTON */}
           <TouchableOpacity
-            onPress={editMeasurements}
+            style={[
+              styles.submitButton,
+              submitting && styles.submitButtonDisabled,
+            ]}
+            onPress={handleSubmitOrder}
             disabled={submitting}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Confirm order"
           >
-            <Text style={styles.editText}>
-              EDIT
-            </Text>
-          </TouchableOpacity>
-        </View>
+            {submitting ? (
+              <View style={styles.submitContent}>
+                <ActivityIndicator color="#fff" />
 
-        <View style={styles.card}>
-          <Text style={styles.measurementCategory}>
-            Upper Body
-          </Text>
-
-          <MeasurementRow
-            title="Shoulder"
-            value={measurement?.shoulder}
-          />
-
-          <MeasurementRow
-            title="Chest / Bust"
-            value={measurement?.chest}
-          />
-
-          <MeasurementRow
-            title="Waist"
-            value={measurement?.waist}
-          />
-
-          <MeasurementRow
-            title="Sleeve Length"
-            value={measurement?.sleeve_length}
-          />
-
-          <MeasurementRow
-            title="Top Length"
-            value={measurement?.top_length}
-          />
-
-          <View style={styles.measurementDivider} />
-
-          <Text style={styles.measurementCategory}>
-            Lower Body
-          </Text>
-
-          <MeasurementRow
-            title="Hips"
-            value={measurement?.hips}
-          />
-
-          <MeasurementRow
-            title="Inseam"
-            value={measurement?.inseam}
-          />
-
-          <MeasurementRow
-            title="Bottom Length"
-            value={measurement?.bottom_length}
-          />
-        </View>
-
-        {/* ORDER TOTAL */}
-        <View style={styles.totalBox}>
-          <Text style={styles.totalLabel}>
-            Order Total
-          </Text>
-
-          <Text style={styles.totalAmount}>
-            {formatPrice(totalAmount)}
-          </Text>
-        </View>
-
-        {/* PAYMENT SUMMARY */}
-        <View style={styles.depositBox}>
-          <Text style={styles.depositTitle}>
-            Payment Summary
-          </Text>
-
-          <View style={styles.paymentRow}>
-            <View style={styles.paymentDescription}>
-              <Text style={styles.paymentLabel}>
-                Required Deposit (50%)
-              </Text>
-
-              <Text style={styles.paymentMethod}>
-                Online payment · GCash / PayPal
-              </Text>
-            </View>
-
-            <Text style={styles.depositAmount}>
-              {formatPrice(depositAmount)}
-            </Text>
-          </View>
-
-          <View style={styles.paymentRow}>
-            <View style={styles.paymentDescription}>
-              <Text style={styles.paymentLabel}>
-                Remaining Balance (50%)
-              </Text>
-
-              <Text style={styles.paymentMethod}>
-                Cash payment · At pickup
-              </Text>
-            </View>
-
-            <Text style={styles.balanceAmount}>
-              {formatPrice(remainingBalance)}
-            </Text>
-          </View>
-
-          <View style={styles.depositDivider} />
-
-          <Text style={styles.depositNote}>
-            Pay your 50% deposit online to proceed with your order. The remaining balance must be paid in cash when you pick up your finished garment.
-          </Text>
-        </View>
-
-        {/* CONFIRM BUTTON */}
-        <TouchableOpacity
-          style={[
-            styles.submitButton,
-            submitting && styles.submitButtonDisabled,
-          ]}
-          onPress={handleSubmitOrder}
-          disabled={submitting}
-          activeOpacity={0.85}
-        >
-          {submitting ? (
-            <View style={styles.submitContent}>
-              <ActivityIndicator color="#fff" />
-
+                <Text style={styles.submitButtonText}>
+                  SUBMITTING ORDER...
+                </Text>
+              </View>
+            ) : (
               <Text style={styles.submitButtonText}>
-                SUBMITTING ORDER...
+                CONFIRM ORDER
               </Text>
-            </View>
-          ) : (
-            <Text style={styles.submitButtonText}>
-              CONFIRM ORDER
-            </Text>
-          )}
-        </TouchableOpacity>
+            )}
+          </TouchableOpacity>
 
-        <Text style={styles.bottomNote}>
-          Please review your order carefully before confirming.
-        </Text>
+          <Text style={styles.bottomNote}>
+            Please review your order carefully before confirming.
+          </Text>
+        </View>
       </ScrollView>
     </View>
   );
@@ -646,9 +671,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF8FA',
   },
 
-  content: {
-    paddingTop: 20,
+  scrollContent: {
+    alignItems: 'center',
     paddingBottom: 45,
+  },
+
+  innerContent: {
+    width: '100%',
+    maxWidth: 760,
+    paddingTop: 20,
+    paddingBottom: 5,
+    alignSelf: 'center',
   },
 
   header: {

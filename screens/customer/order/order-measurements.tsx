@@ -549,7 +549,7 @@ const styles = StyleSheet.create({
   editButton: {
     backgroundColor: '#fff',
     borderWidth: 1,
-    borderColor: '#e8558a',
+    borderColor: '#D96B8A',
     paddingVertical: 16,
     borderRadius: 10,
     alignItems: 'center',
@@ -557,13 +557,13 @@ const styles = StyleSheet.create({
   },
 
   editButtonText: {
-    color: '#e8558a',
+    color: '#D96B8A',
     fontSize: 15,
     fontWeight: 'bold',
   },
 
   continueButton: {
-    backgroundColor: '#e8558a',
+    backgroundColor: '#D96B8A',
     paddingVertical: 16,
     borderRadius: 10,
     alignItems: 'center',

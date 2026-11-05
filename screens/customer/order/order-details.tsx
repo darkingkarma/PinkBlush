@@ -214,6 +214,24 @@ const formatDateTime = (value: string | null | undefined) => {
   });
 };
 
+const formatDateTimeSchedule = (
+  value: string | null | undefined,
+) => {
+  if (!value) return 'Not specified';
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return 'Date unavailable';
+
+  return date.toLocaleString('en-PH', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+};  
+
 const formatPrice = (
   amount: number | string | null | undefined,
 ) => {
@@ -294,6 +312,48 @@ export default function OrderDetailsScreen({ route, navigation }: Props) {
   const [paymentError, setPaymentError] =
     useState<string | null>(null);
 
+  const markOrderNotificationsAsRead = async (
+    currentOrderId: string,
+    currentOrderType: 'custom' | 'catalog',
+    userId: string,
+  ) => {
+    try {
+      let notificationQuery = supabase
+        .from('notifications')
+        .update({
+          is_read: true,
+          read_at: new Date().toISOString(),
+        })
+        .eq('recipient_id', userId)
+        .eq('is_read', false);
+
+      if (currentOrderType === 'custom') {
+        notificationQuery = notificationQuery.eq(
+          'custom_order_id',
+          currentOrderId,
+        );
+      } else {
+        notificationQuery = notificationQuery.eq(
+          'order_id',
+          currentOrderId,
+        );
+      }
+
+      const { error } = await notificationQuery;
+
+      if (error) {
+        console.warn(
+          'Unable to mark order notifications as read:',
+          error.message,
+        );
+      }
+    } catch (error) {
+      console.warn(
+        'Notification read update failed:',
+        error,
+      );
+    }
+  };
   const fetchPayments = async (
     currentOrderId: string,
     currentOrderType: 'custom' | 'catalog',
@@ -486,6 +546,11 @@ export default function OrderDetailsScreen({ route, navigation }: Props) {
             'This custom order was not found or you do not have permission to view it.',
           );
         }
+        await markOrderNotificationsAsRead(
+          orderId,
+          'custom',
+          user.id,
+        );
 
         await Promise.all([
           fetchProductionTracking(orderId, 'custom'),
@@ -582,6 +647,11 @@ export default function OrderDetailsScreen({ route, navigation }: Props) {
           'This catalog order was not found or you do not have permission to view it.',
         );
       }
+      await markOrderNotificationsAsRead(
+        orderId,
+        'catalog',
+        user.id,
+      );
 
       await Promise.all([
         fetchProductionTracking(orderId, 'catalog'),
@@ -1421,7 +1491,7 @@ export default function OrderDetailsScreen({ route, navigation }: Props) {
 
           <Text style={styles.scheduleValue}>
             {fittingDate
-              ? formatDate(fittingDate)
+              ? formatDateTimeSchedule(fittingDate)
               : 'Not scheduled yet'}
           </Text>
 
@@ -1450,7 +1520,7 @@ export default function OrderDetailsScreen({ route, navigation }: Props) {
 
           <Text style={styles.scheduleValue}>
             {pickupDate
-              ? formatDate(pickupDate)
+              ? formatDateTimeSchedule(pickupDate)
               : 'Not scheduled yet'}
           </Text>
 

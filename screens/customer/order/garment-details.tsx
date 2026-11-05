@@ -11,6 +11,7 @@ import {
   FlatList,
   Alert,
   RefreshControl,
+  useWindowDimensions,
 } from 'react-native';
 
 import { Ionicons } from '@expo/vector-icons';
@@ -41,6 +42,13 @@ export default function CustomerGarmentDetailsScreen({
 }: Props) {
   const { garment } = route.params;
 
+  const { width } = useWindowDimensions();
+
+  const imageHeight = Math.min(
+    Math.max(width * 0.45, 190),
+    300
+  );
+
   const [parts, setParts] = useState<GarmentPart[]>([]);
   const [selectedParts, setSelectedParts] = useState<string[]>([]);
 
@@ -50,7 +58,7 @@ export default function CustomerGarmentDetailsScreen({
 
   const [imageFailed, setImageFailed] = useState(false);
 
-  // Load available parts for this garment.
+  // Load available garment parts.
   const getParts = useCallback(async (isRefresh = false) => {
     if (isRefresh) {
       setRefreshing(true);
@@ -76,7 +84,7 @@ export default function CustomerGarmentDetailsScreen({
 
       setParts(availableParts);
 
-      // Remove selections for parts that are no longer available.
+      // Keep only selections that are still available.
       setSelectedParts((current) =>
         current.filter((id) =>
           availableParts.some((part) => part.id === id)
@@ -94,7 +102,7 @@ export default function CustomerGarmentDetailsScreen({
     }
   }, [garment.id]);
 
-  // Reload when returning to this screen.
+  // Reload parts whenever this screen becomes active.
   useFocusEffect(
     useCallback(() => {
       void getParts();
@@ -119,13 +127,14 @@ export default function CustomerGarmentDetailsScreen({
   );
 
   const totalPrice = selectedItems.reduce(
-    (total, part) => total + Number(part.price || 0),
+    (total, part) =>
+      total + Number(part.price || 0),
     0
   );
 
   // Continue to part configuration.
   const continueOrder = () => {
-    if (selectedParts.length === 0) {
+    if (selectedItems.length === 0) {
       Alert.alert(
         'Select Garment Parts',
         'Please select at least one garment part to continue.'
@@ -135,11 +144,11 @@ export default function CustomerGarmentDetailsScreen({
 
     navigation.navigate('ConfigureParts', {
       garment,
-      selectedPartIds: selectedParts,
+      selectedPartIds: selectedItems.map((part) => part.id),
     });
   };
 
-  // Individual part card.
+  // Individual garment part card.
   const renderPart = ({ item }: { item: GarmentPart }) => {
     const selected = selectedParts.includes(item.id);
 
@@ -151,6 +160,11 @@ export default function CustomerGarmentDetailsScreen({
         ]}
         onPress={() => togglePart(item.id)}
         activeOpacity={0.8}
+        accessibilityRole="checkbox"
+        accessibilityState={{ checked: selected }}
+        accessibilityLabel={`${item.name}, ₱${Number(
+          item.price || 0
+        ).toFixed(2)}`}
       >
         <View style={styles.cardHeader}>
           <View style={styles.partInfo}>
@@ -194,7 +208,7 @@ export default function CustomerGarmentDetailsScreen({
               selected && styles.selectedText,
             ]}
           >
-            {selected ? 'selected' : 'Tap to Select'}
+            {selected ? 'Selected' : 'Tap to Select'}
           </Text>
         </View>
       </TouchableOpacity>
@@ -203,188 +217,228 @@ export default function CustomerGarmentDetailsScreen({
 
   return (
     <View style={styles.container}>
-      <FlatList
-        data={parts}
-        keyExtractor={(item) => item.id}
-        renderItem={renderPart}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.list}
-        keyboardShouldPersistTaps="handled"
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor="#d96b8a"
-            colors={['#d96b8a']}
-          />
-        }
-        ListHeaderComponent={
-          <View>
-            {/* Garment Image */}
-            {garment.image_url && !imageFailed ? (
-              <View style={styles.imageContainer}>
-                <Image
-                  source={{ uri: garment.image_url }}
-                  style={styles.garmentImage}
-                  resizeMode="contain"
-                  onError={() => setImageFailed(true)}
-                />
+      <View style={styles.contentWrapper}>
+        <FlatList
+          data={parts}
+          keyExtractor={(item) => item.id}
+          renderItem={renderPart}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.list}
+          keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor="#d96b8a"
+              colors={['#d96b8a']}
+            />
+          }
+          ListHeaderComponent={
+            <View>
+              {/* Garment Image */}
+              {garment.image_url && !imageFailed ? (
+                <View
+                  style={[
+                    styles.imageContainer,
+                    { height: imageHeight },
+                  ]}
+                >
+                  <Image
+                    source={{ uri: garment.image_url }}
+                    style={styles.garmentImage}
+                    resizeMode="contain"
+                    onError={() => setImageFailed(true)}
+                  />
+                </View>
+              ) : (
+                <View
+                  style={[
+                    styles.imagePlaceholder,
+                    { height: imageHeight },
+                  ]}
+                >
+                  <Ionicons
+                    name="shirt-outline"
+                    size={55}
+                    color="#d96b8a"
+                  />
+
+                  <Text style={styles.placeholderTitle}>
+                    PINK BLUSH
+                  </Text>
+
+                  <Text style={styles.placeholderText}>
+                    Garment Collection
+                  </Text>
+                </View>
+              )}
+
+              {/* Garment Information */}
+              <Text style={styles.title}>
+                {garment.name}
+              </Text>
+
+              <Text style={styles.description}>
+                {garment.description ||
+                  'No description available.'}
+              </Text>
+
+              {/* Parts Section */}
+              <View style={styles.sectionHeader}>
+                <View style={styles.sectionInfo}>
+                  <Text style={styles.sectionTitle}>
+                    Select Garment Parts
+                  </Text>
+
+                  <Text style={styles.helperText}>
+                    Select one or more parts for your garment.
+                  </Text>
+                </View>
+
+                <View style={styles.countBadge}>
+                  <Text style={styles.countText}>
+                    {selectedItems.length} Selected
+                  </Text>
+                </View>
               </View>
-            ) : (
-              <View style={styles.imagePlaceholder}>
-                <Ionicons
-                  name="shirt-outline"
-                  size={55}
+
+              {/* Error message when existing parts are displayed */}
+              {!!loadError && parts.length > 0 && (
+                <View style={styles.errorBanner}>
+                  <Ionicons
+                    name="alert-circle-outline"
+                    size={20}
+                    color="#B84470"
+                  />
+
+                  <View style={styles.errorInfo}>
+                    <Text style={styles.errorBannerText}>
+                      Could not refresh garment parts.
+                    </Text>
+
+                    <TouchableOpacity
+                      onPress={() => void getParts()}
+                    >
+                      <Text style={styles.errorRetryText}>
+                        Try Again
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+            </View>
+          }
+          ListEmptyComponent={
+            loading ? (
+              <View style={styles.emptyContainer}>
+                <ActivityIndicator
+                  size="large"
                   color="#d96b8a"
                 />
 
-                <Text style={styles.placeholderTitle}>
-                  PINK BLUSH
-                </Text>
-
-                <Text style={styles.placeholderText}>
-                  Garment Collection
+                <Text style={styles.emptyText}>
+                  Loading garment parts...
                 </Text>
               </View>
-            )}
-
-            {/* Garment Information */}
-            <Text style={styles.title}>
-              {garment.name}
-            </Text>
-
-            <Text style={styles.description}>
-              {garment.description ||
-                'No description available.'}
-            </Text>
-
-            {/* Parts Header */}
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionInfo}>
-                <Text style={styles.sectionTitle}>
-                  Select Garment Parts
-                </Text>
-
-                <Text style={styles.helperText}>
-                  Select one or more parts for your garment.
-                </Text>
-              </View>
-
-              <View style={styles.countBadge}>
-                <Text style={styles.countText}>
-                  {selectedParts.length} Selected
-                </Text>
-              </View>
-            </View>
-          </View>
-        }
-        ListEmptyComponent={
-          loading ? (
-            <View style={styles.emptyContainer}>
-              <ActivityIndicator
-                size="large"
-                color="#d96b8a"
-              />
-
-              <Text style={styles.emptyText}>
-                Loading garment parts...
-              </Text>
-            </View>
-          ) : loadError ? (
-            <View style={styles.emptyContainer}>
-              <Ionicons
-                name="cloud-offline-outline"
-                size={45}
-                color="#d96b8a"
-              />
-
-              <Text style={styles.emptyTitle}>
-                Unable to Load Parts
-              </Text>
-
-              <Text style={styles.emptyText}>
-                {loadError}
-              </Text>
-
-              <TouchableOpacity
-                style={styles.retryButton}
-                onPress={() => void getParts()}
-              >
-                <Text style={styles.retryButtonText}>
-                  Try Again
-                </Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <View style={styles.emptyContainer}>
-              <Ionicons
-                name="shirt-outline"
-                size={45}
-                color="#d96b8a"
-              />
-
-              <Text style={styles.emptyTitle}>
-                No Parts Available
-              </Text>
-
-              <Text style={styles.emptyText}>
-                This garment currently has no available parts.
-                Please check again later.
-              </Text>
-            </View>
-          )
-        }
-        ListFooterComponent={
-          !loading && !loadError && parts.length > 0 ? (
-            <View style={styles.footer}>
-              {/* Selection Summary */}
-              <View style={styles.summary}>
-                <View>
-                  <Text style={styles.summaryLabel}>
-                    Selected Parts
-                  </Text>
-
-                  <Text style={styles.summaryCount}>
-                    {selectedParts.length} part(s)
-                  </Text>
-                </View>
-
-                <View style={styles.totalContainer}>
-                  <Text style={styles.summaryLabel}>
-                    Parts Total
-                  </Text>
-
-                  <Text style={styles.totalPrice}>
-                    ₱{totalPrice.toFixed(2)}
-                  </Text>
-                </View>
-              </View>
-
-              {/* Continue Button */}
-              <TouchableOpacity
-                style={[
-                  styles.continueButton,
-                  selectedParts.length === 0 &&
-                    styles.disabledButton,
-                ]}
-                disabled={selectedParts.length === 0}
-                onPress={continueOrder}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.continueButtonText}>
-                  Continue to Configure
-                </Text>
-
+            ) : loadError ? (
+              <View style={styles.emptyContainer}>
                 <Ionicons
-                  name="arrow-forward"
-                  size={19}
-                  color="#fff"
+                  name="cloud-offline-outline"
+                  size={45}
+                  color="#d96b8a"
                 />
-              </TouchableOpacity>
+
+                <Text style={styles.emptyTitle}>
+                  Unable to Load Parts
+                </Text>
+
+                <Text style={styles.emptyText}>
+                  {loadError}
+                </Text>
+
+                <TouchableOpacity
+                  style={styles.retryButton}
+                  onPress={() => void getParts()}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.retryButtonText}>
+                    Try Again
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.emptyContainer}>
+                <Ionicons
+                  name="shirt-outline"
+                  size={45}
+                  color="#d96b8a"
+                />
+
+                <Text style={styles.emptyTitle}>
+                  No Parts Available
+                </Text>
+
+                <Text style={styles.emptyText}>
+                  This garment currently has no available parts.
+                  Please check again later.
+                </Text>
+              </View>
+            )
+          }
+        />
+
+        {/* Fixed Bottom Selection Summary */}
+        {!loading && !loadError && parts.length > 0 && (
+          <View style={styles.bottomBar}>
+            <View style={styles.summary}>
+              <View style={styles.summaryInfo}>
+                <Text style={styles.summaryLabel}>
+                  Selected Parts
+                </Text>
+
+                <Text style={styles.summaryCount}>
+                  {selectedItems.length} part(s)
+                </Text>
+              </View>
+
+              <View style={styles.totalContainer}>
+                <Text style={styles.summaryLabel}>
+                  Parts Total
+                </Text>
+
+                <Text style={styles.totalPrice}>
+                  ₱{totalPrice.toFixed(2)}
+                </Text>
+              </View>
             </View>
-          ) : null
-        }
-      />
+
+            <TouchableOpacity
+              style={[
+                styles.continueButton,
+                selectedItems.length === 0 &&
+                  styles.disabledButton,
+              ]}
+              disabled={selectedItems.length === 0}
+              onPress={continueOrder}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityState={{
+                disabled: selectedItems.length === 0,
+              }}
+            >
+              <Text style={styles.continueButtonText}>
+                Continue to Configure
+              </Text>
+
+              <Ionicons
+                name="arrow-forward"
+                size={19}
+                color="#fff"
+              />
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
     </View>
   );
 }
@@ -393,17 +447,26 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#FFF8FA',
+    alignItems: 'center',
+  },
+
+  contentWrapper: {
+    flex: 1,
+    width: '100%',
+    maxWidth: 760,
   },
 
   list: {
-    padding: 18,
-    paddingBottom: 35,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 25,
     flexGrow: 1,
   },
 
   imageContainer: {
     width: '100%',
-    height: 230,
+    maxWidth: 650,
+    alignSelf: 'center',
     borderRadius: 16,
     marginBottom: 18,
     backgroundColor: '#FFF0F5',
@@ -420,7 +483,8 @@ const styles = StyleSheet.create({
 
   imagePlaceholder: {
     width: '100%',
-    height: 230,
+    maxWidth: 650,
+    alignSelf: 'center',
     borderRadius: 16,
     backgroundColor: '#FBEAF0',
     justifyContent: 'center',
@@ -478,6 +542,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#888',
     marginTop: 5,
+    lineHeight: 19,
   },
 
   countBadge: {
@@ -574,20 +639,30 @@ const styles = StyleSheet.create({
     color: '#D96B8A',
   },
 
-  footer: {
-    marginTop: 8,
+  bottomBar: {
+    width: '100%',
+    backgroundColor: '#FFF',
+    borderTopWidth: 1,
+    borderTopColor: '#F0E5E9',
+    paddingHorizontal: 18,
+    paddingTop: 13,
+    paddingBottom: 12,
   },
 
   summary: {
-    backgroundColor: '#fff',
+    backgroundColor: '#FFF8FA',
     borderRadius: 14,
-    padding: 17,
+    padding: 15,
     borderWidth: 1,
     borderColor: '#F0E5E9',
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 15,
+    marginBottom: 12,
+  },
+
+  summaryInfo: {
+    flex: 1,
   },
 
   summaryLabel: {
@@ -667,5 +742,31 @@ const styles = StyleSheet.create({
   retryButtonText: {
     color: '#fff',
     fontWeight: '700',
+  },
+
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FCE7EE',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 15,
+    gap: 10,
+  },
+
+  errorInfo: {
+    flex: 1,
+  },
+
+  errorBannerText: {
+    fontSize: 12,
+    color: '#8F3658',
+  },
+
+  errorRetryText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#B84470',
+    marginTop: 5,
   },
 });

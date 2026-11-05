@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "829302167903",
+    "project_id": "pinkblush",
+    "storage_bucket": "pinkblush.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:829302167903:android:64f591c61dbb0c7ba13eea",
+        "android_client_info": {
+          "package_name": "com.darkingkarma.pinkblush"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB8ies6bp5ptxr-xatniSBFNlH0ltKqBHo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

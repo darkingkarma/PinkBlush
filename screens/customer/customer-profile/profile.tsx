@@ -28,6 +28,7 @@ import {
 } from 'react';
 
 import { supabase } from '../../../supabase';
+import { unregisterPushNotificationsAsync } from '../../../pushNotifications';
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Profile'>,
@@ -96,10 +97,30 @@ export default function ProfileScreen({ navigation }: Props) {
           text: 'Log Out',
           style: 'destructive',
           onPress: async () => {
-            const { error } = await supabase.auth.signOut();
+            try {
+              const {
+                data: { user },
+                error: userError,
+              } = await supabase.auth.getUser();
 
-            if (error) {
-              Alert.alert('Logout Failed', error.message);
+              if (userError) throw userError;
+
+              if (user) {
+                await unregisterPushNotificationsAsync(user.id);
+              }
+
+              const { error } = await supabase.auth.signOut();
+
+              if (error) throw error;
+            } catch (error) {
+              console.error('Customer logout error:', error);
+
+              Alert.alert(
+                'Logout Failed',
+                error instanceof Error
+                  ? error.message
+                  : 'Unable to log out. Please try again.',
+              );
             }
           },
         },

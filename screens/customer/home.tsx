@@ -1,4 +1,3 @@
-
 import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
@@ -129,6 +128,7 @@ export default function HomeScreen({ navigation }: Props) {
 
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [loadingDesigns, setLoadingDesigns] = useState(true);
+  const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -147,6 +147,7 @@ export default function HomeScreen({ navigation }: Props) {
             if (isActive) {
               setOrders([]);
               setDesigns([]);
+              setHasUnreadNotifications(false);
               setLoadingOrders(false);
               setLoadingDesigns(false);
             }
@@ -158,6 +159,7 @@ export default function HomeScreen({ navigation }: Props) {
             customResult,
             designsResult,
             productionResult,
+            unreadNotificationsResult,
           ] = await Promise.all([
             supabase
               .from('orders')
@@ -186,12 +188,21 @@ export default function HomeScreen({ navigation }: Props) {
                 updated_at
               `)
               .order('updated_at', { ascending: false }),
+
+            supabase
+              .from('notifications')
+              .select('id', { count: 'exact', head: true })
+              .eq('recipient_id', user.id)
+              .eq('is_read', false),
           ]);
 
           if (catalogResult.error) throw catalogResult.error;
           if (customResult.error) throw customResult.error;
           if (designsResult.error) throw designsResult.error;
           if (productionResult.error) throw productionResult.error;
+          if (unreadNotificationsResult.error) {
+            throw unreadNotificationsResult.error;
+          }
 
           // Get the latest production update for each order.
           const latestProductionUpdates = new Map<
@@ -267,6 +278,10 @@ export default function HomeScreen({ navigation }: Props) {
           if (isActive) {
             setOrders(allOrders.slice(0, 3));
             setDesigns((designsResult.data || []) as Design[]);
+
+            setHasUnreadNotifications(
+              (unreadNotificationsResult.count ?? 0) > 0
+            );
           }
         } catch (error) {
           console.error('Home data loading error:', error);
@@ -312,7 +327,10 @@ export default function HomeScreen({ navigation }: Props) {
               size={23}
               color="#d96b8a"
             />
-            <View style={styles.notificationDot} />
+
+            {hasUnreadNotifications && (
+              <View style={styles.notificationDot} />
+            )}
           </TouchableOpacity>
         </View>
 

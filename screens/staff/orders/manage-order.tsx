@@ -322,7 +322,48 @@ const getId = (record: any, keys: string[]) => {
   const value = getField(record, keys);
   return value ? String(value) : null;
 };
+async function markOrderNotificationsAsRead(
+  currentOrderId: string,
+  currentOrderType: OrderType,
+  userId: string,
+) {
+  try {
+    let notificationQuery = supabase
+      .from('notifications')
+      .update({
+        is_read: true,
+        read_at: new Date().toISOString(),
+      })
+      .eq('recipient_id', userId)
+      .eq('is_read', false);
 
+    if (currentOrderType === 'custom') {
+      notificationQuery = notificationQuery.eq(
+        'custom_order_id',
+        currentOrderId,
+      );
+    } else {
+      notificationQuery = notificationQuery.eq(
+        'order_id',
+        currentOrderId,
+      );
+    }
+
+    const { error } = await notificationQuery;
+
+    if (error) {
+      console.warn(
+        'Unable to mark order notifications as read:',
+        error.message,
+      );
+    }
+  } catch (error) {
+    console.warn(
+      'Notification read update failed:',
+      error,
+    );
+  }
+}
 export default function ManageOrderScreen() {
   const route = useRoute<any>();
 
@@ -761,8 +802,25 @@ export default function ManageOrderScreen() {
       if (productionResult.error) throw productionResult.error;
 
       if (!orderResult.data) {
-        throw new Error('This order could not be found.');
-      }
+            throw new Error('This order could not be found.');
+          }
+
+          // Get the currently logged-in staff account.
+          const {
+            data: { user },
+            error: userError,
+          } = await supabase.auth.getUser();
+
+          if (userError || !user) {
+            throw new Error('Please log in again.');
+          }
+
+          // Mark only notifications belonging to this order as read.
+          await markOrderNotificationsAsRead(
+            orderId,
+            orderType,
+        user.id,
+      );
 
       const orderData = orderResult.data;
       const assigned = assignmentResult.data as Assignment | null;

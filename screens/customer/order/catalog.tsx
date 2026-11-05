@@ -11,6 +11,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 
@@ -48,6 +49,11 @@ type CatalogNavigation = NavigationProp<
 
 export default function CatalogScreen() {
   const navigation = useNavigation<CatalogNavigation>();
+
+  // Detect screen width for responsive columns.
+  const { width } = useWindowDimensions();
+
+  const numColumns = width >= 700 ? 3 : 2;
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [garments, setGarments] = useState<Garment[]>([]);
@@ -136,6 +142,11 @@ export default function CatalogScreen() {
     const searchText = search.trim().toLowerCase();
 
     return garments.filter((garment) => {
+      // Hide garments belonging to unavailable categories.
+      if (!categoryNameById.has(garment.category_id)) {
+        return false;
+      }
+
       const categoryName =
         categoryNameById.get(garment.category_id) ?? '';
 
@@ -378,10 +389,12 @@ export default function CatalogScreen() {
         </View>
       ) : (
         <FlatList
+          // Remount FlatList when the column count changes.
+          key={`catalog-${numColumns}`}
           data={filteredGarments}
           renderItem={renderGarment}
           keyExtractor={(item) => item.id}
-          numColumns={2}
+          numColumns={numColumns}
           columnWrapperStyle={styles.garmentRow}
           contentContainerStyle={styles.garmentList}
           showsVerticalScrollIndicator={false}
@@ -553,6 +566,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingBottom: 24,
     flexGrow: 1,
+    width: '100%',
+    maxWidth: 1100,
+    alignSelf: 'center',
   },
 
   garmentRow: {
