@@ -1,5 +1,5 @@
+import React, { useCallback, useRef, useState } from 'react';
 
-import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -10,6 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
 
@@ -56,14 +57,32 @@ const COLORS = {
 };
 
 export default function NotificationsScreen({ navigation }: Props) {
-
   const [notifications, setNotifications] = useState<Notification[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+
   const [openingId, setOpeningId] = useState<string | null>(null);
   const [markingAll, setMarkingAll] = useState(false);
 
-  const loadNotifications = useCallback(async () => {
+  const [errorMessage, setErrorMessage] = useState('');
+
+  // Prevent old requests from updating the screen after leaving it.
+  const isFocusedRef = useRef(false);
+  const requestIdRef = useRef(0);
+
+  // LOAD NOTIFICATIONS
+  const loadNotifications = useCallback(async (isRefresh = false) => {
+    const requestId = ++requestIdRef.current;
+
+    if (isRefresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+
+    setErrorMessage('');
+
     try {
       const {
         data: { user },
@@ -71,6 +90,10 @@ export default function NotificationsScreen({ navigation }: Props) {
       } = await supabase.auth.getUser();
 
       if (userError) throw userError;
+
+      if (!isFocusedRef.current || requestId !== requestIdRef.current) {
+        return;
+      }
 
       if (!user) {
         setNotifications([]);
@@ -98,31 +121,53 @@ export default function NotificationsScreen({ navigation }: Props) {
 
       if (error) throw error;
 
+      if (!isFocusedRef.current || requestId !== requestIdRef.current) {
+        return;
+      }
+
       setNotifications((data ?? []) as Notification[]);
     } catch (error) {
       console.error('Notification loading error:', error);
-      Alert.alert(
-        'Unable to load notifications',
-        'Please try again.'
-      );
+
+      if (isFocusedRef.current && requestId === requestIdRef.current) {
+        setErrorMessage(
+          error instanceof Error
+            ? error.message
+            : 'Unable to load notifications. Please try again.'
+        );
+      }
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (isFocusedRef.current && requestId === requestIdRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
+  // RELOAD WHEN SCREEN RECEIVES FOCUS
   useFocusEffect(
     useCallback(() => {
-      setLoading(true);
-      void loadNotifications();
+      isFocusedRef.current = true;
+
+      void loadNotifications(false);
+
+      return () => {
+        isFocusedRef.current = false;
+
+        // Invalidate any request still running.
+        requestIdRef.current += 1;
+      };
     }, [loadNotifications])
   );
 
+  // PULL TO REFRESH
   const onRefresh = () => {
-    setRefreshing(true);
-    void loadNotifications();
+    if (loading || refreshing) return;
+
+    void loadNotifications(true);
   };
 
+  // MARK ONE NOTIFICATION AS READ
   const markAsRead = async (notification: Notification) => {
     if (notification.is_read) return;
 
@@ -134,22 +179,28 @@ export default function NotificationsScreen({ navigation }: Props) {
         is_read: true,
         read_at: readAt,
       })
-      .eq('id', notification.id);
+      .eq('id', notification.id)
+      .eq('recipient_id', notification.recipient_id);
 
     if (error) {
       console.error('Mark notification read error:', error);
       throw error;
     }
 
-    setNotifications((current) =>
-      current.map((item) =>
+    setNotifications(current =>
+      current.map(item =>
         item.id === notification.id
-          ? { ...item, is_read: true, read_at: readAt }
+          ? {
+              ...item,
+              is_read: true,
+              read_at: readAt,
+            }
           : item
       )
     );
   };
 
+  // MARK ALL NOTIFICATIONS AS READ
   const markAllAsRead = async () => {
     if (unreadCount === 0 || markingAll) return;
 
@@ -162,7 +213,10 @@ export default function NotificationsScreen({ navigation }: Props) {
       } = await supabase.auth.getUser();
 
       if (userError) throw userError;
-      if (!user) return;
+
+      if (!user) {
+        throw new Error('Please log in again.');
+      }
 
       const readAt = new Date().toISOString();
 
@@ -177,8 +231,8 @@ export default function NotificationsScreen({ navigation }: Props) {
 
       if (error) throw error;
 
-      setNotifications((current) =>
-        current.map((item) => ({
+      setNotifications(current =>
+        current.map(item => ({
           ...item,
           is_read: true,
           read_at: item.is_read ? item.read_at : readAt,
@@ -186,15 +240,19 @@ export default function NotificationsScreen({ navigation }: Props) {
       );
     } catch (error) {
       console.error('Mark all notifications read error:', error);
+
       Alert.alert(
-        'Unable to update notifications',
-        'Please try again.'
+        'Unable to Update Notifications',
+        error instanceof Error
+          ? error.message
+          : 'Please try again.'
       );
     } finally {
       setMarkingAll(false);
     }
   };
 
+  // FORMAT NOTIFICATION TIME
   const formatTime = (dateString: string) => {
     const date = new Date(dateString);
 
@@ -208,15 +266,21 @@ export default function NotificationsScreen({ navigation }: Props) {
 
     if (minutes < 1) return 'Just now';
 
-    if (minutes < 60) return `${minutes}m ago`;
+    if (minutes < 60) {
+      return `${minutes}m ago`;
+    }
 
     const hours = Math.floor(minutes / 60);
 
-    if (hours < 24) return `${hours}h ago`;
+    if (hours < 24) {
+      return `${hours}h ago`;
+    }
 
     const days = Math.floor(hours / 24);
 
-    if (days < 7) return `${days}d ago`;
+    if (days < 7) {
+      return `${days}d ago`;
+    }
 
     return date.toLocaleDateString('en-PH', {
       month: 'short',
@@ -225,12 +289,11 @@ export default function NotificationsScreen({ navigation }: Props) {
     });
   };
 
-  // Resolve the order directly from the notification first.
-  // If the notification only has a payment or production reference,
-  // retrieve the related order from Supabase.
+  // RESOLVE RELATED ORDER
   const resolveOrderTarget = async (
     notification: Notification
   ): Promise<OrderTarget | null> => {
+    // Direct custom order reference.
     if (notification.custom_order_id) {
       return {
         orderId: notification.custom_order_id,
@@ -238,6 +301,7 @@ export default function NotificationsScreen({ navigation }: Props) {
       };
     }
 
+    // Direct catalog order reference.
     if (notification.order_id) {
       return {
         orderId: notification.order_id,
@@ -245,7 +309,7 @@ export default function NotificationsScreen({ navigation }: Props) {
       };
     }
 
-    // Payment notifications may contain only payment_id.
+    // PAYMENT NOTIFICATION
     if (notification.payment_id) {
       const { data: payment, error } = await supabase
         .from('payments')
@@ -270,7 +334,7 @@ export default function NotificationsScreen({ navigation }: Props) {
       }
     }
 
-    // Production notifications may contain only production_tracking_id.
+    // PRODUCTION NOTIFICATION
     if (notification.production_tracking_id) {
       const { data: production, error } = await supabase
         .from('production_tracking')
@@ -298,23 +362,24 @@ export default function NotificationsScreen({ navigation }: Props) {
     return null;
   };
 
+  // OPEN NOTIFICATION
   const openNotification = async (notification: Notification) => {
-    if (openingId) return;
+    if (openingId !== null) return;
 
     setOpeningId(notification.id);
 
     try {
-      // Mark the notification as read before navigating.
+      // Mark as read first.
       await markAsRead(notification);
 
+      // Find the related order.
       const target = await resolveOrderTarget(notification);
 
-      // Notifications without an associated order are simply marked read.
+      // Some notifications may not be connected to an order.
       if (!target) {
         return;
       }
 
-      // Determine whether the logged-in user is staff or customer.
       const {
         data: { user },
         error: userError,
@@ -326,6 +391,7 @@ export default function NotificationsScreen({ navigation }: Props) {
         throw new Error('Please log in again.');
       }
 
+      // Determine account role.
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('role')
@@ -345,13 +411,14 @@ export default function NotificationsScreen({ navigation }: Props) {
           'Unable to determine your account role. Please try again.'
         );
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('Open notification error:', error);
 
       Alert.alert(
         'Unable to Open Notification',
-        error?.message ??
-          'The related order could not be opened. Please try again.'
+        error instanceof Error
+          ? error.message
+          : 'The related order could not be opened. Please try again.'
       );
     } finally {
       setOpeningId(null);
@@ -359,7 +426,7 @@ export default function NotificationsScreen({ navigation }: Props) {
   };
 
   const unreadCount = notifications.filter(
-    (item) => !item.is_read
+    item => !item.is_read
   ).length;
 
   return (
@@ -367,7 +434,9 @@ export default function NotificationsScreen({ navigation }: Props) {
       {/* HEADER */}
       <View style={styles.header}>
         <View style={styles.headerTitleContainer}>
-          <Text style={styles.headerTitle}>Notifications</Text>
+          <Text style={styles.headerTitle}>
+            Notifications
+          </Text>
 
           {unreadCount > 0 && (
             <Text style={styles.headerUnread}>
@@ -400,113 +469,150 @@ export default function NotificationsScreen({ navigation }: Props) {
         </TouchableOpacity>
       </View>
 
-      {/* CONTENT */}
-      {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator
-            size="large"
-            color={COLORS.rose}
+      {/* NOTIFICATION LIST */}
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={COLORS.rose}
+            colors={[COLORS.rose]}
           />
-
-          <Text style={styles.loadingText}>
-            Loading notifications...
-          </Text>
-        </View>
-      ) : notifications.length === 0 ? (
-        <View style={styles.center}>
-          <Text style={styles.emptyTitle}>
-            No notifications yet
-          </Text>
-
-          <Text style={styles.emptyText}>
-            We'll let you know when there is an update
-            about your orders.
-          </Text>
-        </View>
-      ) : (
-        <ScrollView
-          style={styles.container}
-          contentContainerStyle={styles.content}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={COLORS.rose}
+        }
+      >
+        {loading ? (
+          <View style={styles.center}>
+            <ActivityIndicator
+              size="large"
+              color={COLORS.rose}
             />
-          }
-        >
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>
-              Recent Activity
-            </Text>
 
-            <Text style={styles.sectionSubtitle}>
-              Your latest order and payment updates
+            <Text style={styles.loadingText}>
+              Loading notifications...
             </Text>
           </View>
+        ) : errorMessage ? (
+          <View style={styles.center}>
+            <View style={styles.errorIcon}>
+              <Text style={styles.errorIconText}>!</Text>
+            </View>
 
-          {notifications.map((notification) => (
+            <Text style={styles.emptyTitle}>
+              Unable to Load Notifications
+            </Text>
+
+            <Text style={styles.emptyText}>
+              {errorMessage}
+            </Text>
+
             <TouchableOpacity
-              key={notification.id}
+              style={styles.retryButton}
+              onPress={() => void loadNotifications(false)}
               activeOpacity={0.8}
-              style={[
-                styles.notificationCard,
-                !notification.is_read && styles.unreadCard,
-                openingId === notification.id && styles.openingCard,
-              ]}
-              onPress={() => openNotification(notification)}
-              disabled={openingId !== null}
             >
-              <View style={styles.notificationContent}>
-                <View style={styles.titleRow}>
-                  <Text
-                    style={[
-                      styles.notificationTitle,
-                      !notification.is_read && styles.unreadTitle,
-                    ]}
-                  >
-                    {notification.title}
-                  </Text>
-
-                  {!notification.is_read && (
-                    <View style={styles.unreadDot} />
-                  )}
-                </View>
-
-                <Text style={styles.notificationMessage}>
-                  {notification.message}
-                </Text>
-
-                <View style={styles.cardBottom}>
-                  <Text style={styles.notificationTime}>
-                    {formatTime(notification.created_at)}
-                  </Text>
-
-                  {!notification.is_read && (
-                    <Text style={styles.unreadLabel}>
-                      UNREAD
-                    </Text>
-                  )}
-                </View>
-
-                {openingId === notification.id && (
-                  <View style={styles.openingIndicator}>
-                    <ActivityIndicator
-                      size="small"
-                      color={COLORS.rose}
-                    />
-
-                    <Text style={styles.openingText}>
-                      Opening...
-                    </Text>
-                  </View>
-                )}
-              </View>
+              <Text style={styles.retryButtonText}>
+                Try Again
+              </Text>
             </TouchableOpacity>
-          ))}
-        </ScrollView>
-      )}
+          </View>
+        ) : notifications.length === 0 ? (
+          <View style={styles.center}>
+            <View style={styles.emptyIcon}>
+              <Text style={styles.emptyIconText}>♡</Text>
+            </View>
+
+            <Text style={styles.emptyTitle}>
+              No notifications yet
+            </Text>
+
+            <Text style={styles.emptyText}>
+              We'll let you know when there is an update
+              about your orders.
+            </Text>
+
+            <Text style={styles.pullText}>
+              Pull down to refresh.
+            </Text>
+          </View>
+        ) : (
+          <>
+            {/* SECTION HEADER */}
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>
+                Recent Activity
+              </Text>
+
+              <Text style={styles.sectionSubtitle}>
+                Your latest order and payment updates
+              </Text>
+            </View>
+
+            {/* NOTIFICATION CARDS */}
+            {notifications.map(notification => (
+              <TouchableOpacity
+                key={notification.id}
+                activeOpacity={0.8}
+                style={[
+                  styles.notificationCard,
+                  !notification.is_read && styles.unreadCard,
+                  openingId === notification.id && styles.openingCard,
+                ]}
+                onPress={() => openNotification(notification)}
+                disabled={openingId !== null}
+              >
+                <View style={styles.notificationContent}>
+                  <View style={styles.titleRow}>
+                    <Text
+                      style={[
+                        styles.notificationTitle,
+                        !notification.is_read && styles.unreadTitle,
+                      ]}
+                    >
+                      {notification.title}
+                    </Text>
+
+                    {!notification.is_read && (
+                      <View style={styles.unreadDot} />
+                    )}
+                  </View>
+
+                  <Text style={styles.notificationMessage}>
+                    {notification.message}
+                  </Text>
+
+                  <View style={styles.cardBottom}>
+                    <Text style={styles.notificationTime}>
+                      {formatTime(notification.created_at)}
+                    </Text>
+
+                    {!notification.is_read && (
+                      <Text style={styles.unreadLabel}>
+                        UNREAD
+                      </Text>
+                    )}
+                  </View>
+
+                  {openingId === notification.id && (
+                    <View style={styles.openingIndicator}>
+                      <ActivityIndicator
+                        size="small"
+                        color={COLORS.rose}
+                      />
+
+                      <Text style={styles.openingText}>
+                        Opening...
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </TouchableOpacity>
+            ))}
+          </>
+        )}
+      </ScrollView>
     </View>
   );
 }
@@ -574,6 +680,7 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 700,
     alignSelf: 'center',
+    flexGrow: 1,
   },
 
   sectionHeader: {
@@ -687,7 +794,8 @@ const styles = StyleSheet.create({
   },
 
   center: {
-    flex: 1,
+    flexGrow: 1,
+    minHeight: 350,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 30,
@@ -699,9 +807,41 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
 
+  emptyIcon: {
+    width: 65,
+    height: 65,
+    borderRadius: 33,
+    backgroundColor: COLORS.blush,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+
+  emptyIconText: {
+    color: COLORS.rose,
+    fontSize: 35,
+    fontWeight: '400',
+  },
+
+  errorIcon: {
+    width: 55,
+    height: 55,
+    borderRadius: 28,
+    backgroundColor: '#FCEAEA',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+
+  errorIconText: {
+    color: '#C03939',
+    fontSize: 28,
+    fontWeight: 'bold',
+  },
+
   emptyTitle: {
     color: COLORS.ink,
-    fontSize: 19,
+    fontSize: 18,
     fontWeight: '800',
     textAlign: 'center',
   },
@@ -712,5 +852,25 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     textAlign: 'center',
     marginTop: 8,
+  },
+
+  pullText: {
+    color: '#AA9BA3',
+    fontSize: 11,
+    marginTop: 15,
+  },
+
+  retryButton: {
+    backgroundColor: COLORS.rose,
+    paddingVertical: 11,
+    paddingHorizontal: 24,
+    borderRadius: 9,
+    marginTop: 18,
+  },
+
+  retryButtonText: {
+    color: COLORS.white,
+    fontSize: 12,
+    fontWeight: '700',
   },
 });

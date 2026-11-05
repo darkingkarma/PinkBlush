@@ -1,4 +1,5 @@
-import { useCallback, useState } from 'react';
+
+import { useCallback, useRef, useState } from 'react';
 
 import {
   ActivityIndicator,
@@ -34,7 +35,11 @@ export default function ManageTailorsScreen() {
 
   const [tailors, setTailors] = useState<Tailor[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [busyTailorId, setBusyTailorId] = useState<string | null>(null);
+
+  const hasLoaded = useRef(false);
 
   const [modalVisible, setModalVisible] = useState(false);
   const [editingTailor, setEditingTailor] =
@@ -46,9 +51,13 @@ export default function ManageTailorsScreen() {
 
   // LOAD TAILORS
   const loadTailors = useCallback(async () => {
-    try {
+    if (hasLoaded.current) {
+      setRefreshing(true);
+    } else {
       setLoading(true);
+    }
 
+    try {
       const { data, error } = await supabase
         .from('tailors')
         .select(
@@ -57,19 +66,23 @@ export default function ManageTailorsScreen() {
         .order('created_at', { ascending: false });
 
       if (error) {
-        Alert.alert('Error', error.message);
-        return;
+        throw error;
       }
 
       setTailors((data ?? []) as Tailor[]);
+      hasLoaded.current = true;
     } catch (error) {
       console.error('Load tailors error:', error);
+
       Alert.alert(
-        'Error',
-        'Unable to load the tailor list.'
+        'Unable to Load Tailors',
+        error instanceof Error
+          ? error.message
+          : 'Please check your connection and try again.'
       );
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
@@ -89,12 +102,16 @@ export default function ManageTailorsScreen() {
 
   // OPEN ADD MODAL
   const openAddModal = () => {
+    if (saving) return;
+
     resetForm();
     setModalVisible(true);
   };
 
   // OPEN EDIT MODAL
   const openEditModal = (tailor: Tailor) => {
+    if (busyTailorId || saving) return;
+
     setEditingTailor(tailor);
     setFullName(tailor.full_name);
     setContactNumber(tailor.contact_number ?? '');
@@ -115,12 +132,32 @@ export default function ManageTailorsScreen() {
     const name = fullName.trim();
     const phone = contactNumber.trim();
 
-    if (!name) {
+    if (name.length < 2) {
       Alert.alert(
-        'Missing Name',
-        'Please enter the tailor full name.'
+        'Invalid Name',
+        'Please enter a full name with at least 2 characters.'
       );
       return;
+    }
+
+    if (name.length > 80) {
+      Alert.alert(
+        'Name Too Long',
+        'The tailor name must not exceed 80 characters.'
+      );
+      return;
+    }
+
+    if (phone) {
+      const digits = phone.replace(/\D/g, '');
+
+      if (digits.length < 7 || digits.length > 15) {
+        Alert.alert(
+          'Invalid Contact Number',
+          'Please enter a valid contact number containing 7 to 15 digits.'
+        );
+        return;
+      }
     }
 
     try {
@@ -137,16 +174,22 @@ export default function ManageTailorsScreen() {
             .from('tailors')
             .update(values)
             .eq('id', editingTailor.id)
+            .select('id')
+            .maybeSingle()
         : await supabase
             .from('tailors')
-            .insert(values);
+            .insert(values)
+            .select('id')
+            .single();
 
       if (result.error) {
-        Alert.alert(
-          'Unable to Save',
-          result.error.message
+        throw result.error;
+      }
+
+      if (!result.data) {
+        throw new Error(
+          'No tailor record was updated. Please check your account permissions.'
         );
-        return;
       }
 
       const wasEditing = !!editingTailor;
@@ -167,7 +210,9 @@ export default function ManageTailorsScreen() {
 
       Alert.alert(
         'Unable to Save',
-        'Something went wrong while saving the tailor.'
+        error instanceof Error
+          ? error.message
+          : 'Something went wrong while saving the tailor.'
       );
     } finally {
       setSaving(false);
@@ -176,6 +221,8 @@ export default function ManageTailorsScreen() {
 
   // TOGGLE AVAILABILITY
   const toggleAvailability = (tailor: Tailor) => {
+    if (busyTailorId || saving) return;
+
     const nextValue = !tailor.is_available;
 
     Alert.alert(
@@ -191,11 +238,13 @@ export default function ManageTailorsScreen() {
           style: 'cancel',
         },
         {
-          text: nextValue
-            ? 'Set Available'
-            : 'Set Unavailable',
+          text: nextValue ? 'Set Available' : 'Set Unavailable',
           onPress: async () => {
+            if (busyTailorId) return;
+
             try {
+              setBusyTailorId(tailor.id);
+
               const { error } = await supabase
                 .from('tailors')
                 .update({
@@ -204,14 +253,17 @@ export default function ManageTailorsScreen() {
                 .eq('id', tailor.id);
 
               if (error) {
-                Alert.alert(
-                  'Update Failed',
-                  error.message
-                );
-                return;
+                throw error;
               }
 
-              await loadTailors();
+              // Update the list immediately.
+              setTailors((previous) =>
+                previous.map((item) =>
+                  item.id === tailor.id
+                    ? { ...item, is_available: nextValue }
+                    : item
+                )
+              );
             } catch (error) {
               console.error(
                 'Toggle availability error:',
@@ -220,8 +272,12 @@ export default function ManageTailorsScreen() {
 
               Alert.alert(
                 'Update Failed',
-                'Unable to update tailor availability.'
+                error instanceof Error
+                  ? error.message
+                  : 'Unable to update tailor availability.'
               );
+            } finally {
+              setBusyTailorId(null);
             }
           },
         },
@@ -231,9 +287,11 @@ export default function ManageTailorsScreen() {
 
   // DELETE TAILOR
   const deleteTailor = (tailor: Tailor) => {
+    if (busyTailorId || saving) return;
+
     Alert.alert(
       'Delete Tailor',
-      `Are you sure you want to permanently delete "${tailor.full_name}"? Tailors with existing assignments may not be deletable.`,
+      `Are you sure you want to permanently delete "${tailor.full_name}"? If this tailor has existing order assignments or production history, deletion may be restricted.`,
       [
         {
           text: 'Cancel',
@@ -243,36 +301,47 @@ export default function ManageTailorsScreen() {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
+            if (busyTailorId) return;
+
             try {
-              const { error } = await supabase
+              setBusyTailorId(tailor.id);
+
+              const { data, error } = await supabase
                 .from('tailors')
                 .delete()
-                .eq('id', tailor.id);
+                .eq('id', tailor.id)
+                .select('id')
+                .maybeSingle();
 
               if (error) {
-                Alert.alert(
-                  'Cannot Delete Tailor',
-                  'This tailor may have existing order assignments. If they have order history, mark them unavailable instead.'
-                );
-                return;
+                throw error;
               }
 
-              await loadTailors();
+              if (!data) {
+                throw new Error(
+                  'The tailor could not be deleted. Check your database permissions or whether this tailor still exists.'
+                );
+              }
+
+              setTailors((previous) =>
+                previous.filter((item) => item.id !== tailor.id)
+              );
 
               Alert.alert(
                 'Success',
                 'Tailor deleted successfully.'
               );
             } catch (error) {
-              console.error(
-                'Delete tailor error:',
-                error
-              );
+              console.error('Delete tailor error:', error);
 
               Alert.alert(
-                'Delete Failed',
-                'Unable to delete this tailor.'
+                'Cannot Delete Tailor',
+                error instanceof Error
+                  ? `${error.message}\n\nIf this tailor has existing assignments or production history, mark them unavailable instead.`
+                  : 'Unable to delete this tailor. If they have existing assignments, mark them unavailable instead.'
               );
+            } finally {
+              setBusyTailorId(null);
             }
           },
         },
@@ -281,97 +350,107 @@ export default function ManageTailorsScreen() {
   };
 
   // RENDER TAILOR CARD
-  const renderTailor = ({
-    item,
-  }: {
-    item: Tailor;
-  }) => (
-    <View style={styles.card}>
-      <View style={styles.cardHeader}>
-        <View style={styles.details}>
-          <Text
-            style={styles.name}
-            numberOfLines={2}
-          >
-            {item.full_name}
-          </Text>
+  const renderTailor = ({ item }: { item: Tailor }) => {
+    const isBusy = busyTailorId === item.id;
 
-          <Text style={styles.contact}>
-            {item.contact_number ||
-              'No contact number'}
-          </Text>
-
-          <View style={styles.statusContainer}>
-            <View
-              style={[
-                styles.statusDot,
-                item.is_available
-                  ? styles.availableDot
-                  : styles.unavailableDot,
-              ]}
-            />
-
-            <Text
-              style={[
-                styles.statusText,
-                item.is_available
-                  ? styles.availableText
-                  : styles.unavailableText,
-              ]}
-            >
-              {item.is_available
-                ? 'Available'
-                : 'Unavailable'}
+    return (
+      <View style={styles.card}>
+        <View style={styles.cardHeader}>
+          <View style={styles.details}>
+            <Text style={styles.name} numberOfLines={2}>
+              {item.full_name}
             </Text>
+
+            <Text style={styles.contact}>
+              {item.contact_number || 'No contact number'}
+            </Text>
+
+            <View style={styles.statusContainer}>
+              <View
+                style={[
+                  styles.statusDot,
+                  item.is_available
+                    ? styles.availableDot
+                    : styles.unavailableDot,
+                ]}
+              />
+
+              <Text
+                style={[
+                  styles.statusText,
+                  item.is_available
+                    ? styles.availableText
+                    : styles.unavailableText,
+                ]}
+              >
+                {item.is_available ? 'Available' : 'Unavailable'}
+              </Text>
+            </View>
           </View>
         </View>
-      </View>
 
-      <View
-        style={[
-          styles.actions,
-          isSmallScreen && styles.actionsSmall,
-        ]}
-      >
-        <TouchableOpacity
-          style={styles.editButton}
-          onPress={() => openEditModal(item)}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.buttonText}>
-            Edit
-          </Text>
-        </TouchableOpacity>
+        {isBusy && (
+          <View style={styles.actionLoading}>
+            <ActivityIndicator size="small" color="#D96B8A" />
+            <Text style={styles.actionLoadingText}>
+              Updating tailor...
+            </Text>
+          </View>
+        )}
 
-        <TouchableOpacity
+        <View
           style={[
-            styles.availabilityButton,
-            item.is_available
-              ? styles.disableButton
-              : styles.enableButton,
+            styles.actions,
+            isSmallScreen && styles.actionsSmall,
           ]}
-          onPress={() => toggleAvailability(item)}
-          activeOpacity={0.8}
         >
-          <Text style={styles.buttonText}>
-            {item.is_available
-              ? 'Disable'
-              : 'Enable'}
-          </Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.editButton,
+              isSmallScreen && styles.smallActionButton,
+              isBusy && styles.disabledButton,
+            ]}
+            onPress={() => openEditModal(item)}
+            disabled={!!busyTailorId}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.buttonText}>Edit</Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.deleteButton}
-          onPress={() => deleteTailor(item)}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.buttonText}>
-            Delete
-          </Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.availabilityButton,
+              item.is_available
+                ? styles.disableButton
+                : styles.enableButton,
+              isSmallScreen && styles.smallActionButton,
+              isBusy && styles.disabledButton,
+            ]}
+            onPress={() => toggleAvailability(item)}
+            disabled={!!busyTailorId}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.buttonText}>
+              {item.is_available ? 'Disable' : 'Enable'}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.deleteButton,
+              isSmallScreen && styles.smallActionButton,
+              isBusy && styles.disabledButton,
+            ]}
+            onPress={() => deleteTailor(item)}
+            disabled={!!busyTailorId}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.buttonText}>Delete</Text>
+          </TouchableOpacity>
+        </View>
       </View>
-    </View>
-  );
+    );
+  };
 
   // MAIN UI
   return (
@@ -379,9 +458,7 @@ export default function ManageTailorsScreen() {
       {/* HEADER */}
       <View style={styles.header}>
         <View style={styles.headerTextContainer}>
-          <Text style={styles.title}>
-            Manage Tailors
-          </Text>
+          <Text style={styles.title}>Manage Tailors</Text>
 
           <Text style={styles.subtitle}>
             Manage your tailoring team
@@ -393,9 +470,7 @@ export default function ManageTailorsScreen() {
             {tailors.length}
           </Text>
 
-          <Text style={styles.countLabel}>
-            Tailors
-          </Text>
+          <Text style={styles.countLabel}>Tailors</Text>
         </View>
       </View>
 
@@ -405,38 +480,21 @@ export default function ManageTailorsScreen() {
           <Text style={styles.summaryNumber}>
             {tailors.length}
           </Text>
-
-          <Text style={styles.summaryLabel}>
-            Total
-          </Text>
+          <Text style={styles.summaryLabel}>Total</Text>
         </View>
 
         <View style={styles.summaryItem}>
           <Text style={styles.summaryNumber}>
-            {
-              tailors.filter(
-                (tailor) => tailor.is_available
-              ).length
-            }
+            {tailors.filter((item) => item.is_available).length}
           </Text>
-
-          <Text style={styles.summaryLabel}>
-            Available
-          </Text>
+          <Text style={styles.summaryLabel}>Available</Text>
         </View>
 
         <View style={styles.summaryItem}>
           <Text style={styles.summaryNumber}>
-            {
-              tailors.filter(
-                (tailor) => !tailor.is_available
-              ).length
-            }
+            {tailors.filter((item) => !item.is_available).length}
           </Text>
-
-          <Text style={styles.summaryLabel}>
-            Unavailable
-          </Text>
+          <Text style={styles.summaryLabel}>Unavailable</Text>
         </View>
       </View>
 
@@ -444,6 +502,7 @@ export default function ManageTailorsScreen() {
       <TouchableOpacity
         style={styles.addButton}
         onPress={openAddModal}
+        disabled={saving || !!busyTailorId}
         activeOpacity={0.85}
       >
         <Text style={styles.addButtonText}>
@@ -454,11 +513,7 @@ export default function ManageTailorsScreen() {
       {/* TAILOR LIST */}
       {loading ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator
-            size="large"
-            color="#D96B8A"
-          />
-
+          <ActivityIndicator size="large" color="#D96B8A" />
           <Text style={styles.loadingText}>
             Loading tailors...
           </Text>
@@ -470,9 +525,10 @@ export default function ManageTailorsScreen() {
           renderItem={renderTailor}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.list}
+          keyboardShouldPersistTaps="handled"
           refreshControl={
             <RefreshControl
-              refreshing={loading}
+              refreshing={refreshing}
               onRefresh={loadTailors}
               tintColor="#D96B8A"
               colors={['#D96B8A']}
@@ -498,37 +554,26 @@ export default function ManageTailorsScreen() {
         animationType="slide"
         transparent
         onRequestClose={closeModal}
+        statusBarTranslucent
       >
         <KeyboardAvoidingView
           style={styles.modalOverlay}
-          behavior={
-            Platform.OS === 'ios'
-              ? 'padding'
-              : undefined
-          }
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         >
           <View style={styles.modalContainer}>
             <ScrollView
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
-              contentContainerStyle={
-                styles.modalScrollContent
-              }
+              contentContainerStyle={styles.modalScrollContent}
             >
               {/* MODAL HEADER */}
               <View style={styles.modalHeader}>
-                <View
-                  style={styles.modalTitleContainer}
-                >
+                <View style={styles.modalTitleContainer}>
                   <Text style={styles.modalTitle}>
-                    {editingTailor
-                      ? 'Edit Tailor'
-                      : 'Add Tailor'}
+                    {editingTailor ? 'Edit Tailor' : 'Add Tailor'}
                   </Text>
 
-                  <Text
-                    style={styles.modalSubtitle}
-                  >
+                  <Text style={styles.modalSubtitle}>
                     {editingTailor
                       ? 'Update tailor information'
                       : 'Register a new member of your tailoring team'}
@@ -541,16 +586,12 @@ export default function ManageTailorsScreen() {
                   disabled={saving}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.closeText}>
-                    ×
-                  </Text>
+                  <Text style={styles.closeText}>×</Text>
                 </TouchableOpacity>
               </View>
 
               {/* FULL NAME */}
-              <Text style={styles.label}>
-                Full Name *
-              </Text>
+              <Text style={styles.label}>Full Name *</Text>
 
               <TextInput
                 style={styles.input}
@@ -559,13 +600,13 @@ export default function ManageTailorsScreen() {
                 value={fullName}
                 onChangeText={setFullName}
                 autoCapitalize="words"
+                maxLength={80}
                 editable={!saving}
+                returnKeyType="next"
               />
 
               {/* CONTACT NUMBER */}
-              <Text style={styles.label}>
-                Contact Number
-              </Text>
+              <Text style={styles.label}>Contact Number</Text>
 
               <TextInput
                 style={styles.input}
@@ -574,13 +615,12 @@ export default function ManageTailorsScreen() {
                 value={contactNumber}
                 onChangeText={setContactNumber}
                 keyboardType="phone-pad"
+                maxLength={20}
                 editable={!saving}
               />
 
               {/* AVAILABILITY */}
-              <Text style={styles.label}>
-                Availability
-              </Text>
+              <Text style={styles.label}>Availability</Text>
 
               <TouchableOpacity
                 style={[
@@ -589,26 +629,16 @@ export default function ManageTailorsScreen() {
                     ? styles.availabilitySelectorOn
                     : styles.availabilitySelectorOff,
                 ]}
-                onPress={() =>
-                  setIsAvailable(!isAvailable)
-                }
+                onPress={() => setIsAvailable((previous) => !previous)}
                 disabled={saving}
                 activeOpacity={0.8}
               >
                 <View style={styles.availabilityInfo}>
-                  <Text
-                    style={styles.availabilityTitle}
-                  >
-                    {isAvailable
-                      ? 'Available'
-                      : 'Unavailable'}
+                  <Text style={styles.availabilityTitle}>
+                    {isAvailable ? 'Available' : 'Unavailable'}
                   </Text>
 
-                  <Text
-                    style={
-                      styles.availabilityDescription
-                    }
-                  >
+                  <Text style={styles.availabilityDescription}>
                     {isAvailable
                       ? 'This tailor can be assigned to orders.'
                       : 'This tailor will not be available for new assignments.'}
@@ -648,9 +678,7 @@ export default function ManageTailorsScreen() {
                   <ActivityIndicator color="#FFFFFF" />
                 ) : (
                   <Text style={styles.saveButtonText}>
-                    {editingTailor
-                      ? 'Save Changes'
-                      : 'Add Tailor'}
+                    {editingTailor ? 'Save Changes' : 'Add Tailor'}
                   </Text>
                 )}
               </TouchableOpacity>
@@ -662,9 +690,7 @@ export default function ManageTailorsScreen() {
                 disabled={saving}
                 activeOpacity={0.7}
               >
-                <Text
-                  style={styles.cancelButtonText}
-                >
+                <Text style={styles.cancelButtonText}>
                   Cancel
                 </Text>
               </TouchableOpacity>
@@ -681,7 +707,8 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#FFF8FA',
-    padding: 20,
+    paddingHorizontal: 20,
+    paddingTop: 20,
   },
 
   header: {
@@ -849,6 +876,7 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: '#F0E2E7',
+    gap: 7,
   },
 
   actionsSmall: {
@@ -857,23 +885,19 @@ const styles = StyleSheet.create({
 
   editButton: {
     backgroundColor: '#777777',
-    paddingVertical: 9,
+    paddingVertical: 10,
     paddingHorizontal: 15,
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 7,
-    marginBottom: 4,
   },
 
   availabilityButton: {
-    paddingVertical: 9,
+    paddingVertical: 10,
     paddingHorizontal: 15,
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 7,
-    marginBottom: 4,
   },
 
   disableButton: {
@@ -886,18 +910,39 @@ const styles = StyleSheet.create({
 
   deleteButton: {
     backgroundColor: '#D9534F',
-    paddingVertical: 9,
+    paddingVertical: 10,
     paddingHorizontal: 15,
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 4,
+  },
+
+  smallActionButton: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 8,
   },
 
   buttonText: {
     color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '600',
+  },
+
+  disabledButton: {
+    opacity: 0.5,
+  },
+
+  actionLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+  },
+
+  actionLoadingText: {
+    color: '#D96B8A',
+    fontSize: 12,
+    marginLeft: 7,
   },
 
   loadingContainer: {
@@ -977,6 +1022,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#888888',
     marginTop: 4,
+    lineHeight: 19,
   },
 
   closeButton: {
@@ -1013,8 +1059,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     marginBottom: 18,
   },
-
-  // AVAILABILITY SELECTOR
 
   availabilitySelector: {
     borderWidth: 1,
@@ -1091,10 +1135,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 4,
-  },
-
-  disabledButton: {
-    opacity: 0.6,
   },
 
   saveButtonText: {

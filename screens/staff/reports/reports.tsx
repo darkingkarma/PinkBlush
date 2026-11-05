@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+
 import {
   ActivityIndicator,
   Alert,
@@ -8,37 +9,38 @@ import {
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
 } from 'react-native';
 
+import { Ionicons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import * as FileSystem from 'expo-file-system/legacy';
 
 import { supabase } from '../../../supabase';
 
 type OrderRecord = {
   id: string;
   status: string | null;
-  total_amount: number | null;
-  created_at: string;
+  total_amount: number | string | null;
+  created_at: string | null;
 };
 
 type CustomOrderRecord = {
   id: string;
   status: string | null;
-  quoted_price: number | null;
-  deposit_amount: number | null;
-  created_at: string;
+  quoted_price: number | string | null;
+  deposit_amount: number | string | null;
+  created_at: string | null;
 };
 
 type PaymentRecord = {
   id: string;
   order_id: string | null;
   custom_order_id: string | null;
-  amount: number | null;
+  amount: number | string | null;
   payment_type: string | null;
   status: string | null;
-  created_at: string;
+  created_at: string | null;
 };
 
 type ProductionRecord = {
@@ -49,84 +51,107 @@ type ProductionRecord = {
   updated_at: string | null;
 };
 
-type ExportType = 'pdf' | 'csv' | null;
+type ReportSection = {
+  title: string;
+  rows: [string, string | number][];
+};
 
 const PINK = '#D96B8A';
 const DARK_PINK = '#B84470';
-const BACKGROUND = '#FFF9FB';
-const TEXT_DARK = '#392831';
-const TEXT_MUTED = '#8D7780';
-const DIVIDER = '#F0E3E8';
+const LIGHT_PINK = '#FFF1F5';
+const BACKGROUND = '#FFF8FA';
+const TEXT = '#38252D';
+const MUTED = '#8C7880';
+const BORDER = '#F1DDE4';
 
-const normalizeStatus = (
-  status: string | null | undefined
-) =>
-  (status ?? '')
-    .toLowerCase()
-    .trim()
-    .replace(/[_-]/g, ' ')
-    .replace(/\s+/g, ' ');
-
-const normalizeProgress = (
-  status: string | null | undefined
-) =>
-  (status ?? '')
-    .toLowerCase()
-    .trim()
-    .replace(/[\s-]+/g, '_');
-
-const formatMoney = (amount: number) =>
-  `₱${Number(amount || 0).toLocaleString('en-PH', {
+const formatCurrency = (value: number) => {
+  return `₱${value.toLocaleString('en-PH', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
+};
 
-const formatDate = (date: string | null) => {
-  if (!date) return 'Not specified';
+const toNumber = (value: number | string | null | undefined) => {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
 
-  const parsedDate = new Date(date);
+const normalizeStatus = (status: string | null | undefined) => {
+  return (status ?? 'unknown')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+};
 
-  if (Number.isNaN(parsedDate.getTime())) {
-    return 'Not specified';
-  }
+const formatStatus = (status: string | null | undefined) => {
+  return (status ?? 'Unknown')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+};
 
-  return parsedDate.toLocaleString('en-PH', {
+const formatDate = (date: string | null | undefined) => {
+  if (!date) return '—';
+
+  const parsed = new Date(date);
+
+  if (Number.isNaN(parsed.getTime())) return '—';
+
+  return parsed.toLocaleDateString('en-PH', {
+    year: 'numeric',
     month: 'short',
     day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
   });
 };
 
-const formatLabel = (value: string) =>
-  value
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-
-const escapeHtml = (value: string) =>
-  value
+const escapeHtml = (value: string) => {
+  return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+};
 
-const csvEscape = (value: string | number) =>
-  `"${String(value).replace(/"/g, '""')}"`;
+
+const getStatusCount = (
+  records: { status: string | null }[],
+  status: string,
+) => {
+  return records.filter(
+    (record) => normalizeStatus(record.status) === status,
+  ).length;
+};
+
+const sumAmounts = (records: PaymentRecord[]) => {
+  return records.reduce(
+    (total, payment) => total + toNumber(payment.amount),
+    0,
+  );
+};
 
 export default function ReportsManagementScreen() {
+  const { width } = useWindowDimensions();
+  const isWideScreen = width >= 700;
+
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [customOrders, setCustomOrders] = useState<CustomOrderRecord[]>([]);
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
-  const [production, setProduction] = useState<ProductionRecord[]>([]);
+  const [productionRecords, setProductionRecords] = useState<
+    ProductionRecord[]
+  >([]);
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [exporting, setExporting] = useState<ExportType>(null);
+  const [exporting, setExporting] = useState(false);
+  const [loadError, setLoadError] = useState('');
 
-  const loadReports = useCallback(async () => {
+  const loadReports = useCallback(async (showLoader = true) => {
+    if (showLoader) {
+      setLoading(true);
+    }
+
+    setLoadError('');
+
     try {
       const [
         ordersResult,
@@ -142,33 +167,26 @@ export default function ReportsManagementScreen() {
         supabase
           .from('custom_orders')
           .select(
-            'id, status, quoted_price, deposit_amount, created_at'
+            'id, status, quoted_price, deposit_amount, created_at',
           )
           .order('created_at', { ascending: false }),
 
         supabase
           .from('payments')
-          .select(`
-            id,
-            order_id,
-            custom_order_id,
-            amount,
-            payment_type,
-            status,
-            created_at
-          `)
+          .select(
+            'id, order_id, custom_order_id, amount, payment_type, status, created_at',
+          )
           .order('created_at', { ascending: false }),
 
         supabase
           .from('production_tracking')
-          .select(`
-            id,
-            order_id,
-            custom_order_id,
-            status,
-            updated_at
-          `)
-          .order('updated_at', { ascending: false }),
+          .select(
+            'id, order_id, custom_order_id, status, updated_at',
+          )
+          .order('updated_at', {
+            ascending: false,
+            nullsFirst: false,
+          }),
       ]);
 
       if (ordersResult.error) throw ordersResult.error;
@@ -176,17 +194,20 @@ export default function ReportsManagementScreen() {
       if (paymentsResult.error) throw paymentsResult.error;
       if (productionResult.error) throw productionResult.error;
 
-      setOrders((ordersResult.data || []) as OrderRecord[]);
+      setOrders((ordersResult.data ?? []) as OrderRecord[]);
       setCustomOrders(
-        (customOrdersResult.data || []) as CustomOrderRecord[]
+        (customOrdersResult.data ?? []) as CustomOrderRecord[],
       );
-      setPayments((paymentsResult.data || []) as PaymentRecord[]);
-      setProduction(
-        (productionResult.data || []) as ProductionRecord[]
+      setPayments((paymentsResult.data ?? []) as PaymentRecord[]);
+      setProductionRecords(
+        (productionResult.data ?? []) as ProductionRecord[],
       );
-    } catch (error) {
-      console.error('Error loading reports:', error);
-      Alert.alert('Error', 'Unable to load reports. Please try again.');
+    } catch (error: any) {
+      console.error('Reports loading error:', error);
+
+      setLoadError(
+        error?.message || 'Unable to load reports. Please try again.',
+      );
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -197,392 +218,347 @@ export default function ReportsManagementScreen() {
     loadReports();
   }, [loadReports]);
 
-  const handleRefresh = () => {
+  const onRefresh = useCallback(() => {
     setRefreshing(true);
-    loadReports();
-  };
+    loadReports(false);
+  }, [loadReports]);
 
-  // CATALOG ORDER COUNTS
+  const reportData = useMemo(() => {
+    const paidPayments = payments.filter(
+      (payment) => normalizeStatus(payment.status) === 'paid',
+    );
 
-  const catalogPending = orders.filter(
-    (o) => normalizeStatus(o.status) === 'pending'
-  ).length;
+    const pendingPayments = payments.filter(
+      (payment) => normalizeStatus(payment.status) === 'pending',
+    );
 
-  const catalogAccepted = orders.filter(
-    (o) => normalizeStatus(o.status) === 'accepted'
-  ).length;
+    const failedPayments = payments.filter((payment) =>
+      ['failed', 'cancelled', 'canceled'].includes(
+        normalizeStatus(payment.status),
+      ),
+    );
 
-  const catalogInProduction = orders.filter(
-    (o) => normalizeStatus(o.status) === 'in production'
-  ).length;
+    const depositPayments = paidPayments.filter(
+      (payment) =>
+        normalizeStatus(payment.payment_type) === 'deposit',
+    );
 
-  const catalogReady = orders.filter(
-    (o) => normalizeStatus(o.status) === 'ready for release'
-  ).length;
+    const balancePayments = paidPayments.filter(
+      (payment) =>
+        normalizeStatus(payment.payment_type) === 'balance',
+    );
 
-  const catalogCompleted = orders.filter(
-    (o) => normalizeStatus(o.status) === 'completed'
-  ).length;
+    const totalPaid = sumAmounts(paidPayments);
+    const totalPendingPayments = sumAmounts(pendingPayments);
+    const totalDeposits = sumAmounts(depositPayments);
+    const totalBalancePayments = sumAmounts(balancePayments);
 
-  const catalogCancelled = orders.filter(
-    (o) => normalizeStatus(o.status) === 'cancelled'
-  ).length;
+    const catalogOrderValue = orders.reduce((total, order) => {
+      if (normalizeStatus(order.status) === 'cancelled') {
+        return total;
+      }
 
-  // CUSTOM ORDER COUNTS
+      return total + toNumber(order.total_amount);
+    }, 0);
 
-  const customSubmitted = customOrders.filter(
-    (o) => normalizeStatus(o.status) === 'submitted'
-  ).length;
+    const customQuotedValue = customOrders.reduce(
+      (total, order) => {
+        const status = normalizeStatus(order.status);
 
-  const customUnderReview = customOrders.filter(
-    (o) => normalizeStatus(o.status) === 'under review'
-  ).length;
+        if (
+          status === 'declined' ||
+          status === 'cancelled' ||
+          status === 'canceled'
+        ) {
+          return total;
+        }
 
-  const customQuotationSent = customOrders.filter(
-    (o) => normalizeStatus(o.status) === 'quotation sent'
-  ).length;
+        return total + toNumber(order.quoted_price);
+      },
+      0,
+    );
 
-  const customAccepted = customOrders.filter(
-    (o) => normalizeStatus(o.status) === 'accepted'
-  ).length;
+    // Calculate payments received for each catalog order.
+    const catalogPaidByOrder: Record<string, number> = {};
 
-  const customInProduction = customOrders.filter(
-    (o) => normalizeStatus(o.status) === 'in production'
-  ).length;
+    paidPayments.forEach((payment) => {
+      if (!payment.order_id) return;
 
-  const customReadyForFitting = customOrders.filter(
-    (o) => normalizeStatus(o.status) === 'ready for fitting'
-  ).length;
+      catalogPaidByOrder[payment.order_id] =
+        (catalogPaidByOrder[payment.order_id] ?? 0) +
+        toNumber(payment.amount);
+    });
 
-  const customReadyForRelease = customOrders.filter(
-    (o) => normalizeStatus(o.status) === 'ready for release'
-  ).length;
+    // Calculate payments received for each custom order.
+    const customPaidByOrder: Record<string, number> = {};
 
-  const customCompleted = customOrders.filter(
-    (o) => normalizeStatus(o.status) === 'completed'
-  ).length;
+    paidPayments.forEach((payment) => {
+      if (!payment.custom_order_id) return;
 
-  const customDeclined = customOrders.filter(
-    (o) => normalizeStatus(o.status) === 'declined'
-  ).length;
+      customPaidByOrder[payment.custom_order_id] =
+        (customPaidByOrder[payment.custom_order_id] ?? 0) +
+        toNumber(payment.amount);
+    });
 
-  const customCancelled = customOrders.filter(
-    (o) => normalizeStatus(o.status) === 'cancelled'
-  ).length;
+    // Exclude cancelled catalog orders from outstanding balances.
+    // Pending orders are included because they may already have deposits.
+    const catalogOutstanding = orders.reduce((total, order) => {
+      if (normalizeStatus(order.status) === 'cancelled') {
+        return total;
+      }
 
-  // PAYMENT SUMMARY
+      const orderTotal = toNumber(order.total_amount);
+      const amountPaid = catalogPaidByOrder[order.id] ?? 0;
 
-  const paidPayments = payments.filter(
-    (p) => normalizeStatus(p.status) === 'paid'
-  );
+      return total + Math.max(orderTotal - amountPaid, 0);
+    }, 0);
 
-  const pendingPayments = payments.filter(
-    (p) => normalizeStatus(p.status) === 'pending'
-  );
+    // Only include custom orders that have an accepted quotation.
+    const acceptedCustomStatuses = [
+      'accepted',
+      'measurements_pending',
+      'awaiting_deposit',
+      'deposit_paid',
+      'in_production',
+      'ready_for_fitting',
+      'ready_for_release',
+    ];
 
-  const depositPayments = paidPayments.filter(
-    (p) => normalizeStatus(p.payment_type) === 'deposit'
-  );
+    const customOutstanding = customOrders.reduce(
+      (total, order) => {
+        const status = normalizeStatus(order.status);
 
-  const balancePayments = paidPayments.filter(
-    (p) => normalizeStatus(p.payment_type) === 'balance'
-  );
+        if (!acceptedCustomStatuses.includes(status)) {
+          return total;
+        }
 
-  const totalPaid = paidPayments.reduce(
-    (sum, p) => sum + Number(p.amount || 0),
-    0
-  );
+        const quotedPrice = toNumber(order.quoted_price);
+        const amountPaid = customPaidByOrder[order.id] ?? 0;
 
-  const totalDeposits = depositPayments.reduce(
-    (sum, p) => sum + Number(p.amount || 0),
-    0
-  );
+        return total + Math.max(quotedPrice - amountPaid, 0);
+      },
+      0,
+    );
 
-  const totalBalancePayments = balancePayments.reduce(
-    (sum, p) => sum + Number(p.amount || 0),
-    0
-  );
+    // Keep only the latest production status for each order.
+    // The query is sorted newest first, and null dates are placed last.
+    const latestProduction: Record<string, ProductionRecord> = {};
 
-  // ORDER VALUE
+    const sortedProduction = [...productionRecords].sort((a, b) => {
+      const dateA = a.updated_at
+        ? new Date(a.updated_at).getTime()
+        : 0;
 
-  const catalogOrderValue = orders.reduce((sum, order) => {
-    if (normalizeStatus(order.status) === 'cancelled') {
-      return sum;
-    }
+      const dateB = b.updated_at
+        ? new Date(b.updated_at).getTime()
+        : 0;
 
-    return sum + Number(order.total_amount || 0);
-  }, 0);
+      return dateB - dateA;
+    });
 
-  const customQuotedValue = customOrders.reduce((sum, order) => {
-    const status = normalizeStatus(order.status);
+    sortedProduction.forEach((record) => {
+      const key = record.order_id
+        ? `catalog-${record.order_id}`
+        : record.custom_order_id
+          ? `custom-${record.custom_order_id}`
+          : `record-${record.id}`;
 
-    if (status === 'declined' || status === 'cancelled') {
-      return sum;
-    }
+      if (!latestProduction[key]) {
+        latestProduction[key] = record;
+      }
+    });
 
-    return sum + Number(order.quoted_price || 0);
-  }, 0);
+    const latestProductionRecords = Object.values(latestProduction);
 
-  // OUTSTANDING BALANCE
+    const productionStatusCounts = {
+      assigned: getStatusCount(latestProductionRecords, 'assigned'),
+      cutting: getStatusCount(latestProductionRecords, 'cutting'),
+      sewing: getStatusCount(latestProductionRecords, 'sewing'),
+      fitting: getStatusCount(latestProductionRecords, 'fitting'),
+      finishing: getStatusCount(latestProductionRecords, 'finishing'),
+      readyForPickup: getStatusCount(
+        latestProductionRecords,
+        'ready_for_pickup',
+      ),
+      completed: getStatusCount(
+        latestProductionRecords,
+        'completed',
+      ),
+    };
 
-  const catalogEligibleStatuses = [
-    'accepted',
-    'in production',
-    'ready for release',
-  ];
+    const recentOrders = [
+      ...orders.map((order) => ({
+        id: order.id,
+        type: 'Catalog',
+        status: order.status,
+        amount: toNumber(order.total_amount),
+        created_at: order.created_at,
+      })),
+      ...customOrders.map((order) => ({
+        id: order.id,
+        type: 'Custom',
+        status: order.status,
+        amount: toNumber(order.quoted_price),
+        created_at: order.created_at,
+      })),
+    ]
+      .sort((a, b) => {
+        const dateA = a.created_at
+          ? new Date(a.created_at).getTime()
+          : 0;
 
-  const customEligibleStatuses = [
-    'accepted',
-    'in production',
-    'ready for fitting',
-    'ready for release',
-  ];
+        const dateB = b.created_at
+          ? new Date(b.created_at).getTime()
+          : 0;
 
-  const catalogPaidByOrder = new Map<string, number>();
-  const customPaidByOrder = new Map<string, number>();
+        return dateB - dateA;
+      })
+      .slice(0, 5);
 
-  paidPayments.forEach((payment) => {
-    const amount = Number(payment.amount || 0);
+    const recentPayments = payments.slice(0, 5);
 
-    if (payment.order_id) {
-      catalogPaidByOrder.set(
-        payment.order_id,
-        (catalogPaidByOrder.get(payment.order_id) || 0) + amount
-      );
-    }
+    return {
+      paidPayments,
+      pendingPayments,
+      failedPayments,
+      totalPaid,
+      totalPendingPayments,
+      totalDeposits,
+      totalBalancePayments,
+      catalogOrderValue,
+      customQuotedValue,
+      catalogOutstanding,
+      customOutstanding,
+      totalOutstanding: catalogOutstanding + customOutstanding,
+      productionStatusCounts,
+      latestProductionRecords,
+      recentOrders,
+      recentPayments,
+    };
+  }, [orders, customOrders, payments, productionRecords]);
 
-    if (payment.custom_order_id) {
-      customPaidByOrder.set(
-        payment.custom_order_id,
-        (customPaidByOrder.get(payment.custom_order_id) || 0) + amount
-      );
-    }
-  });
-
-  const catalogOutstanding = orders.reduce((sum, order) => {
-    const status = normalizeStatus(order.status);
-
-    if (!catalogEligibleStatuses.includes(status)) {
-      return sum;
-    }
-
-    const total = Number(order.total_amount || 0);
-    const paid = catalogPaidByOrder.get(order.id) || 0;
-
-    return sum + Math.max(total - paid, 0);
-  }, 0);
-
-  const customOutstanding = customOrders.reduce((sum, order) => {
-    const status = normalizeStatus(order.status);
-
-    if (!customEligibleStatuses.includes(status)) {
-      return sum;
-    }
-
-    const total = Number(order.quoted_price || 0);
-    const paid = customPaidByOrder.get(order.id) || 0;
-
-    return sum + Math.max(total - paid, 0);
-  }, 0);
-
-  const totalOutstanding =
-    catalogOutstanding + customOutstanding;
-
-  // PRODUCTION SUMMARY: LATEST RECORD PER ORDER
-
-  const latestProduction = new Map<string, ProductionRecord>();
-
-  production.forEach((record) => {
-    const key = record.order_id
-      ? `catalog-${record.order_id}`
-      : record.custom_order_id
-      ? `custom-${record.custom_order_id}`
-      : `record-${record.id}`;
-
-    if (!latestProduction.has(key)) {
-      latestProduction.set(key, record);
-    }
-  });
-
-  const productionCounts = {
-    assigned: 0,
-    cutting: 0,
-    sewing: 0,
-    fitting: 0,
-    finishing: 0,
-    ready_for_pickup: 0,
-    completed: 0,
-  };
-
-  latestProduction.forEach((record) => {
-    const status = normalizeProgress(
-      record.status
-    ) as keyof typeof productionCounts;
-
-    if (status in productionCounts) {
-      productionCounts[status]++;
-    }
-  });
-
-  // RECENT ORDERS
-
-  const recentOrders = [
-    ...orders.map((order) => ({
-      id: order.id,
-      type: 'Catalog',
-      status: order.status || '',
-      date: order.created_at,
-    })),
-    ...customOrders.map((order) => ({
-      id: order.id,
-      type: 'Custom',
-      status: order.status || '',
-      date: order.created_at,
-    })),
-  ]
-    .sort(
-      (a, b) =>
-        new Date(b.date).getTime() -
-        new Date(a.date).getTime()
-    )
-    .slice(0, 5);
-
-  const recentPayments = payments.slice(0, 5);
-
-  // REPORT DATA USED BY BOTH EXPORT OPTIONS
-
-  const reportSections = [
-    {
-      title: 'Overall Summary',
-      rows: [
-        ['Total Orders', orders.length + customOrders.length],
-        ['Catalog Orders', orders.length],
-        ['Custom Orders', customOrders.length],
-        ['Total Paid', formatMoney(totalPaid)],
-        ['Outstanding Balance', formatMoney(totalOutstanding)],
-        [
-          'Orders In Production',
-          catalogInProduction + customInProduction,
+  const reportSections = useMemo<ReportSection[]>(() => {
+    return [
+      {
+        title: 'Order Summary',
+        rows: [
+          ['Total Catalog Orders', orders.length],
+          ['Total Custom Orders', customOrders.length],
+          ['Catalog Order Value', formatCurrency(reportData.catalogOrderValue)],
+          ['Custom Quoted Value', formatCurrency(reportData.customQuotedValue)],
         ],
-      ],
-    },
-    {
-      title: 'Catalog Orders',
-      rows: [
-        ['Pending', catalogPending],
-        ['Accepted', catalogAccepted],
-        ['In Production', catalogInProduction],
-        ['Ready for Release', catalogReady],
-        ['Completed', catalogCompleted],
-        ['Cancelled', catalogCancelled],
-        ['Catalog Order Value', formatMoney(catalogOrderValue)],
-      ],
-    },
-    {
-      title: 'Custom Orders',
-      rows: [
-        ['Submitted', customSubmitted],
-        ['Under Review', customUnderReview],
-        ['Quotation Sent', customQuotationSent],
-        ['Accepted', customAccepted],
-        ['In Production', customInProduction],
-        ['Ready for Fitting', customReadyForFitting],
-        ['Ready for Release', customReadyForRelease],
-        ['Completed', customCompleted],
-        ['Declined', customDeclined],
-        ['Cancelled', customCancelled],
-        ['Custom Quoted Value', formatMoney(customQuotedValue)],
-      ],
-    },
-    {
-      title: 'Payments',
-      rows: [
-        ['Total Paid', formatMoney(totalPaid)],
-        ['Deposits Collected', formatMoney(totalDeposits)],
-        ['Balance Payments', formatMoney(totalBalancePayments)],
-        ['Pending Payments', pendingPayments.length],
-        ['Outstanding Balance', formatMoney(totalOutstanding)],
-        ['Total Paid Transactions', paidPayments.length],
-      ],
-    },
-    {
-      title: 'Production',
-      rows: [
-        ['Assigned', productionCounts.assigned],
-        ['Cutting', productionCounts.cutting],
-        ['Sewing', productionCounts.sewing],
-        ['Fitting', productionCounts.fitting],
-        ['Finishing', productionCounts.finishing],
-        ['Ready for Pickup', productionCounts.ready_for_pickup],
-        ['Completed', productionCounts.completed],
-      ],
-    },
-  ];
-
-  // EXPORT PDF
+      },
+      {
+        title: 'Catalog Order Status',
+        rows: [
+          ['Pending', getStatusCount(orders, 'pending')],
+          ['Accepted', getStatusCount(orders, 'accepted')],
+          ['In Production', getStatusCount(orders, 'in_production')],
+          ['Ready for Release', getStatusCount(orders, 'ready_for_release')],
+          ['Completed', getStatusCount(orders, 'completed')],
+          ['Cancelled', getStatusCount(orders, 'cancelled')],
+        ],
+      },
+      {
+        title: 'Custom Order Status',
+        rows: [
+          ['Submitted', getStatusCount(customOrders, 'submitted')],
+          ['Under Review', getStatusCount(customOrders, 'under_review')],
+          ['Quotation Sent', getStatusCount(customOrders, 'quotation_sent')],
+          ['Accepted', getStatusCount(customOrders, 'accepted')],
+          ['In Production', getStatusCount(customOrders, 'in_production')],
+          ['Ready for Fitting', getStatusCount(customOrders, 'ready_for_fitting')],
+          ['Ready for Release', getStatusCount(customOrders, 'ready_for_release')],
+          ['Completed', getStatusCount(customOrders, 'completed')],
+          ['Declined', getStatusCount(customOrders, 'declined')],
+          ['Cancelled', getStatusCount(customOrders, 'cancelled')],
+        ],
+      },
+      {
+        title: 'Payment Summary',
+        rows: [
+          ['Total Payments Received', formatCurrency(reportData.totalPaid)],
+          ['Deposit Payments Received', formatCurrency(reportData.totalDeposits)],
+          ['Balance Payments Received', formatCurrency(reportData.totalBalancePayments)],
+          ['Pending Payment Records', reportData.pendingPayments.length],
+          ['Pending Payment Amount', formatCurrency(reportData.totalPendingPayments)],
+          ['Failed / Cancelled Payments', reportData.failedPayments.length],
+          ['Outstanding Catalog Balances', formatCurrency(reportData.catalogOutstanding)],
+          ['Outstanding Custom Balances', formatCurrency(reportData.customOutstanding)],
+          ['Total Outstanding Balance', formatCurrency(reportData.totalOutstanding)],
+        ],
+      },
+      {
+        title: 'Production Summary',
+        rows: [
+          ['Assigned', reportData.productionStatusCounts.assigned],
+          ['Cutting', reportData.productionStatusCounts.cutting],
+          ['Sewing', reportData.productionStatusCounts.sewing],
+          ['Fitting', reportData.productionStatusCounts.fitting],
+          ['Finishing', reportData.productionStatusCounts.finishing],
+          ['Ready for Pickup', reportData.productionStatusCounts.readyForPickup],
+          ['Completed', reportData.productionStatusCounts.completed],
+          ['Tracked Production Orders', reportData.latestProductionRecords.length],
+        ],
+      },
+    ];
+  }, [orders, customOrders, reportData]);
 
   const exportPDF = async () => {
-    try {
-      setExporting('pdf');
+    if (exporting) return;
 
-      const generatedDate = formatDate(new Date().toISOString());
+    try {
+      setExporting(true);
+
+      const generatedDate = new Date().toLocaleString('en-PH');
 
       const sectionsHTML = reportSections
         .map(
           (section) => `
             <div class="section">
               <h2>${escapeHtml(section.title)}</h2>
-              ${section.rows
-                .map(
-                  ([label, value]) => `
-                    <div class="row">
-                      <span>${escapeHtml(String(label))}</span>
-                      <strong>${escapeHtml(String(value))}</strong>
-                    </div>
-                  `
-                )
-                .join('')}
+              <table>
+                ${section.rows
+                  .map(
+                    ([label, value]) => `
+                      <tr>
+                        <td>${escapeHtml(String(label))}</td>
+                        <td class="value">${escapeHtml(String(value))}</td>
+                      </tr>
+                    `,
+                  )
+                  .join('')}
+              </table>
             </div>
-          `
+          `,
         )
         .join('');
 
-      const ordersHTML = recentOrders
+      const recentOrdersHTML = reportData.recentOrders
         .map(
           (order) => `
-            <div class="recent-row">
-              <div>
-                <strong>${escapeHtml(order.type)} Order</strong>
-                <p>${escapeHtml(order.id)}</p>
-                <small>${escapeHtml(formatDate(order.date))}</small>
-              </div>
-              <strong>${escapeHtml(formatLabel(order.status || 'Unknown'))}</strong>
-            </div>
-          `
+            <tr>
+              <td>${escapeHtml(order.type)}</td>
+              <td>${escapeHtml(order.id.slice(0, 8))}</td>
+              <td>${escapeHtml(formatStatus(order.status))}</td>
+              <td>${escapeHtml(formatCurrency(order.amount))}</td>
+              <td>${escapeHtml(formatDate(order.created_at))}</td>
+            </tr>
+          `,
         )
         .join('');
 
-      const paymentsHTML = recentPayments
+      const recentPaymentsHTML = reportData.recentPayments
         .map(
           (payment) => `
-            <div class="recent-row">
-              <div>
-                <strong>${escapeHtml(formatLabel(payment.payment_type || 'Payment'))}</strong>
-                <p>${escapeHtml(
-                  payment.order_id
-                    ? `Order ${payment.order_id}`
-                    : payment.custom_order_id
-                    ? `Custom ${payment.custom_order_id}`
-                    : 'No order'
-                )}</p>
-                <small>${escapeHtml(formatDate(payment.created_at))}</small>
-              </div>
-              <div class="right">
-                <strong>${escapeHtml(formatMoney(Number(payment.amount || 0)))}</strong>
-                <small>${escapeHtml(formatLabel(payment.status || 'Unknown'))}</small>
-              </div>
-            </div>
-          `
+            <tr>
+              <td>${escapeHtml(payment.id.slice(0, 8))}</td>
+              <td>${escapeHtml(formatStatus(payment.payment_type))}</td>
+              <td>${escapeHtml(formatStatus(payment.status))}</td>
+              <td>${escapeHtml(formatCurrency(toNumber(payment.amount)))}</td>
+              <td>${escapeHtml(formatDate(payment.created_at))}</td>
+            </tr>
+          `,
         )
         .join('');
 
@@ -594,91 +570,88 @@ export default function ReportsManagementScreen() {
             <style>
               body {
                 font-family: Arial, sans-serif;
-                color: #392831;
-                padding: 25px;
-                font-size: 12px;
+                padding: 24px;
+                color: #38252D;
               }
+
               h1 {
                 color: #B84470;
-                font-size: 23px;
-                margin-bottom: 5px;
+                margin-bottom: 4px;
               }
+
               .subtitle {
-                color: #8D7780;
-                margin-bottom: 25px;
+                color: #8C7880;
+                font-size: 12px;
+                margin-bottom: 24px;
               }
+
               h2 {
-                font-size: 16px;
                 color: #B84470;
-                border-bottom: 1px solid #F0E3E8;
-                padding-bottom: 8px;
+                font-size: 16px;
                 margin-bottom: 8px;
               }
+
               .section {
-                margin-bottom: 23px;
+                margin-bottom: 24px;
                 page-break-inside: avoid;
               }
-              .row {
-                display: flex;
-                justify-content: space-between;
-                padding: 8px 0;
-                border-bottom: 1px solid #F5EDF0;
+
+              table {
+                width: 100%;
+                border-collapse: collapse;
               }
-              .row strong {
+
+              td, th {
+                padding: 9px;
+                border-bottom: 1px solid #F1DDE4;
+                text-align: left;
+                font-size: 11px;
+              }
+
+              th {
+                background: #FFF1F5;
+                color: #B84470;
+              }
+
+              .value {
                 text-align: right;
-                margin-left: 15px;
-              }
-              .recent-row {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                padding: 10px 0;
-                border-bottom: 1px solid #F0E3E8;
-                page-break-inside: avoid;
-              }
-              .recent-row p {
-                color: #8D7780;
-                font-size: 10px;
-                margin: 4px 0;
-              }
-              .recent-row small {
-                color: #8D7780;
-                font-size: 10px;
-              }
-              .right {
-                text-align: right;
-              }
-              .footer {
-                color: #8D7780;
-                font-size: 10px;
-                margin-top: 25px;
-                text-align: center;
+                font-weight: bold;
               }
             </style>
           </head>
+
           <body>
-            <h1>Pink Blush</h1>
-            <div class="subtitle">
-              Garment Order and Production Management System<br />
-              Reports Management<br />
-              Generated: ${escapeHtml(generatedDate)}
-            </div>
+            <h1>Pink Blush Reports</h1>
+            <p class="subtitle">Generated: ${escapeHtml(generatedDate)}</p>
 
             ${sectionsHTML}
 
             <div class="section">
               <h2>Recent Orders</h2>
-              ${ordersHTML || '<p>No orders yet.</p>'}
+              <table>
+                <tr>
+                  <th>Type</th>
+                  <th>Order ID</th>
+                  <th>Status</th>
+                  <th>Amount</th>
+                  <th>Date</th>
+                </tr>
+                ${recentOrdersHTML || '<tr><td colspan="5">No orders found.</td></tr>'}
+              </table>
             </div>
 
             <div class="section">
               <h2>Recent Payments</h2>
-              ${paymentsHTML || '<p>No payments yet.</p>'}
-            </div>
-
-            <div class="footer">
-              This report is based on the current order, payment,
-              and production records.
+              <table>
+                <tr>
+                  <th>Payment ID</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th>Amount</th>
+                  <th>Date</th>
+                </tr>
+                ${recentPaymentsHTML || '<tr><td colspan="5">No payments found.</td></tr>'}
+              </table>
             </div>
           </body>
         </html>
@@ -691,475 +664,291 @@ export default function ReportsManagementScreen() {
       if (!available) {
         Alert.alert(
           'Sharing unavailable',
-          'Your device does not support sharing this PDF.'
+          'Your device does not support sharing the generated PDF.',
         );
         return;
       }
 
       await Sharing.shareAsync(file.uri, {
         mimeType: 'application/pdf',
-        dialogTitle: 'Export Pink Blush Report',
+        dialogTitle: 'Share Pink Blush Reports',
         UTI: 'com.adobe.pdf',
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('PDF export error:', error);
-      Alert.alert('Export Failed', 'Unable to generate the PDF report.');
+
+      Alert.alert(
+        'Export Failed',
+        error?.message || 'Unable to export the PDF report.',
+      );
     } finally {
-      setExporting(null);
+      setExporting(false);
     }
   };
 
-  // EXPORT CSV - EXCEL COMPATIBLE
+  
 
-  const exportCSV = async () => {
-    try {
-      setExporting('csv');
+  const renderSummaryCard = (
+    title: string,
+    value: string,
+    icon: keyof typeof Ionicons.glyphMap,
+    description: string,
+  ) => (
+    <View style={[styles.summaryCard, isWideScreen && styles.summaryCardWide]}>
+      <View style={styles.summaryTop}>
+        <View style={styles.summaryIcon}>
+          <Ionicons name={icon} size={21} color={DARK_PINK} />
+        </View>
+      </View>
 
-      const rows: (string | number)[][] = [
-        ['PINK BLUSH - REPORTS MANAGEMENT'],
-        ['Generated', formatDate(new Date().toISOString())],
-        [],
-      ];
+      <Text style={styles.summaryTitle}>{title}</Text>
+      <Text style={styles.summaryValue}>{value}</Text>
+      <Text style={styles.summaryDescription}>{description}</Text>
+    </View>
+  );
 
-      reportSections.forEach((section) => {
-        rows.push([section.title]);
-        rows.push(['Description', 'Value']);
+  const renderReportSection = (section: ReportSection) => (
+    <View key={section.title} style={styles.reportCard}>
+      <Text style={styles.cardTitle}>{section.title}</Text>
 
-        section.rows.forEach(([label, value]) => {
-          rows.push([String(label), String(value)]);
-        });
-
-        rows.push([]);
-      });
-
-      rows.push(['RECENT ORDERS']);
-      rows.push(['Order Type', 'Order ID', 'Status', 'Date']);
-
-      recentOrders.forEach((order) => {
-        rows.push([
-          order.type,
-          order.id,
-          formatLabel(order.status || 'Unknown'),
-          formatDate(order.date),
-        ]);
-      });
-
-      rows.push([]);
-      rows.push(['RECENT PAYMENTS']);
-      rows.push([
-        'Payment Type',
-        'Order Reference',
-        'Amount',
-        'Status',
-        'Date',
-      ]);
-
-      recentPayments.forEach((payment) => {
-        rows.push([
-          formatLabel(payment.payment_type || 'Payment'),
-          payment.order_id
-            ? `Order ${payment.order_id}`
-            : payment.custom_order_id
-            ? `Custom ${payment.custom_order_id}`
-            : 'No order',
-          Number(payment.amount || 0).toFixed(2),
-          formatLabel(payment.status || 'Unknown'),
-          formatDate(payment.created_at),
-        ]);
-      });
-
-      const csvContent =
-        '\uFEFF' +
-        rows
-          .map((row) =>
-            row.map((value) => csvEscape(value)).join(',')
-          )
-          .join('\r\n');
-
-      const directory = FileSystem.cacheDirectory;
-
-      if (!directory) {
-        throw new Error('File storage is unavailable.');
-      }
-
-      const fileUri = `${directory}PinkBlush_Report_${Date.now()}.csv`;
-
-      await FileSystem.writeAsStringAsync(fileUri, csvContent, {
-        encoding: FileSystem.EncodingType.UTF8,
-      });
-
-      const available = await Sharing.isAvailableAsync();
-
-      if (!available) {
-        Alert.alert(
-          'Sharing unavailable',
-          'Your device does not support sharing this CSV file.'
-        );
-        return;
-      }
-
-      await Sharing.shareAsync(fileUri, {
-        mimeType: 'text/csv',
-        dialogTitle: 'Export Pink Blush Report',
-        UTI: 'public.comma-separated-values-text',
-      });
-    } catch (error) {
-      console.error('CSV export error:', error);
-      Alert.alert('Export Failed', 'Unable to export the CSV report.');
-    } finally {
-      setExporting(null);
-    }
-  };
+      {section.rows.map(([label, value], index) => (
+        <View
+          key={`${section.title}-${String(label)}`}
+          style={[
+            styles.reportRow,
+            index === section.rows.length - 1 && styles.lastReportRow,
+          ]}
+        >
+          <Text style={styles.reportLabel}>{label}</Text>
+          <Text style={styles.reportValue}>{value}</Text>
+        </View>
+      ))}
+    </View>
+  );
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
+      <View style={styles.centerContainer}>
         <ActivityIndicator size="large" color={PINK} />
         <Text style={styles.loadingText}>Loading reports...</Text>
       </View>
     );
   }
 
-  return (
-    <View style={styles.container}>
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={handleRefresh}
-            tintColor={PINK}
-            colors={[PINK]}
+  if (loadError) {
+    return (
+      <View style={styles.centerContainer}>
+        <View style={styles.errorIcon}>
+          <Ionicons
+            name="alert-circle-outline"
+            size={38}
+            color={DARK_PINK}
           />
-        }
-        contentContainerStyle={styles.content}
-      >
-        <View style={styles.reportContent}>
-          {/* HEADER */}
+        </View>
 
-          <View style={styles.header}>
-            <Text style={styles.title}>Reports Management</Text>
-            <Text style={styles.subtitle}>
-              Overview of orders, payments, production, and revenue.
+        <Text style={styles.errorTitle}>Unable to Load Reports</Text>
+        <Text style={styles.errorMessage}>{loadError}</Text>
+
+        <Pressable
+          style={styles.retryButton}
+          onPress={() => loadReports()}
+        >
+          <Ionicons name="refresh" size={18} color="#FFFFFF" />
+          <Text style={styles.retryButtonText}>Try Again</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.scrollContent}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor={PINK}
+          colors={[PINK]}
+        />
+      }
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={styles.content}>
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.headerTitle}>Reports</Text>
+            <Text style={styles.headerSubtitle}>
+              Order, production, and payment overview
             </Text>
           </View>
 
-          {/* EXPORT BUTTONS */}
+          <View style={styles.headerIcon}>
+            <Ionicons
+              name="stats-chart-outline"
+              size={25}
+              color={DARK_PINK}
+            />
+          </View>
+        </View>
 
-          <View style={styles.exportSection}>
-            <Text style={styles.exportTitle}>Export Reports</Text>
+        <View style={styles.exportContainer}>
+          <Pressable
+            style={[
+              styles.exportButton,
+              exporting && styles.disabledButton,
+            ]}
+            onPress={exportPDF}
+            disabled={exporting}
+          >
+            {exporting ? (
+              <ActivityIndicator color="#FFFFFF" size="small" />
+            ) : (
+              <Ionicons
+                name="document-text-outline"
+                size={19}
+                color="#FFFFFF"
+              />
+            )}
 
-            <View style={styles.exportButtons}>
-              <Pressable
-                style={[
-                  styles.exportButton,
-                  exporting !== null && styles.disabledButton,
-                ]}
-                disabled={exporting !== null}
-                onPress={exportPDF}
-              >
-                {exporting === 'pdf' ? (
-                  <ActivityIndicator color="#FFFFFF" size="small" />
-                ) : (
-                  <Text style={styles.exportButtonText}>
-                    Export PDF
-                  </Text>
-                )}
-              </Pressable>
-
-              <Pressable
-                style={[
-                  styles.exportButton,
-                  styles.csvButton,
-                  exporting !== null && styles.disabledButton,
-                ]}
-                disabled={exporting !== null}
-                onPress={exportCSV}
-              >
-                {exporting === 'csv' ? (
-                  <ActivityIndicator color={DARK_PINK} size="small" />
-                ) : (
-                  <Text style={styles.csvButtonText}>
-                    Export CSV
-                  </Text>
-                )}
-              </Pressable>
-            </View>
-
-            <Text style={styles.exportHint}>
-              PDF is suitable for printing. CSV can be opened in Excel.
+            <Text style={styles.exportButtonText}>
+              {exporting ? 'Preparing PDF...' : 'Export PDF'}
             </Text>
-          </View>
+          </Pressable>
 
-          {/* OVERVIEW */}
+          
+        </View>
 
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Overall Summary</Text>
+        <Text style={styles.sectionHeading}>Overview</Text>
 
-            <View style={styles.highlightRow}>
-              <Text style={styles.highlightLabel}>Total Orders</Text>
-              <Text style={styles.highlightValue}>
-                {orders.length + customOrders.length}
-              </Text>
-            </View>
+        <View style={styles.summaryGrid}>
+          {renderSummaryCard(
+            'Catalog Orders',
+            String(orders.length),
+            'bag-handle-outline',
+            'Total catalog orders',
+          )}
 
-            <ReportRow label="Catalog Orders" value={orders.length} />
-            <ReportRow label="Custom Orders" value={customOrders.length} />
+          {renderSummaryCard(
+            'Custom Orders',
+            String(customOrders.length),
+            'shirt-outline',
+            'Total custom requests',
+          )}
 
-            <ReportDivider />
+          {renderSummaryCard(
+            'Payments Received',
+            formatCurrency(reportData.totalPaid),
+            'wallet-outline',
+            'Successfully paid transactions',
+          )}
 
-            <View style={styles.highlightRow}>
-              <Text style={styles.highlightLabel}>Total Paid</Text>
-              <Text style={styles.moneyHighlight}>
-                {formatMoney(totalPaid)}
-              </Text>
-            </View>
+          {renderSummaryCard(
+            'Outstanding Balance',
+            formatCurrency(reportData.totalOutstanding),
+            'alert-circle-outline',
+            'Remaining order balances',
+          )}
+        </View>
 
-            <ReportRow
-              label="Outstanding Balance"
-              value={formatMoney(totalOutstanding)}
-              highlight
-            />
+        <Text style={styles.sectionHeading}>Detailed Reports</Text>
 
-            <ReportRow
-              label="Orders In Production"
-              value={catalogInProduction + customInProduction}
-            />
-          </View>
+        {reportSections.map(renderReportSection)}
 
-          {/* CATALOG ORDERS */}
+        <View style={styles.reportCard}>
+          <Text style={styles.cardTitle}>Recent Orders</Text>
 
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Catalog Orders</Text>
+          {reportData.recentOrders.length === 0 ? (
+            <Text style={styles.emptyText}>No orders available.</Text>
+          ) : (
+            reportData.recentOrders.map((order, index) => (
+              <View
+                key={`${order.type}-${order.id}`}
+                style={[
+                  styles.recentRow,
+                  index === reportData.recentOrders.length - 1 &&
+                    styles.lastReportRow,
+                ]}
+              >
+                <View style={styles.recentInfo}>
+                  <Text style={styles.recentTitle}>
+                    {order.type} Order
+                  </Text>
 
-            <ReportRow label="Pending" value={catalogPending} />
-            <ReportRow label="Accepted" value={catalogAccepted} />
-            <ReportRow label="In Production" value={catalogInProduction} />
-            <ReportRow label="Ready for Release" value={catalogReady} />
-            <ReportRow label="Completed" value={catalogCompleted} />
-            <ReportRow label="Cancelled" value={catalogCancelled} />
+                  <Text style={styles.recentSubtitle}>
+                    #{order.id.slice(0, 8)} · {formatDate(order.created_at)}
+                  </Text>
 
-            <ReportDivider />
-
-            <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>Catalog Order Value</Text>
-              <Text style={styles.totalValue}>
-                {formatMoney(catalogOrderValue)}
-              </Text>
-            </View>
-          </View>
-
-          {/* CUSTOM ORDERS */}
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Custom Orders</Text>
-
-            <ReportRow label="Submitted" value={customSubmitted} />
-            <ReportRow label="Under Review" value={customUnderReview} />
-            <ReportRow label="Quotation Sent" value={customQuotationSent} />
-            <ReportRow label="Accepted" value={customAccepted} />
-            <ReportRow label="In Production" value={customInProduction} />
-            <ReportRow label="Ready for Fitting" value={customReadyForFitting} />
-            <ReportRow label="Ready for Release" value={customReadyForRelease} />
-            <ReportRow label="Completed" value={customCompleted} />
-            <ReportRow label="Declined" value={customDeclined} />
-            <ReportRow label="Cancelled" value={customCancelled} />
-
-            <ReportDivider />
-
-            <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>Custom Quoted Value</Text>
-              <Text style={styles.totalValue}>
-                {formatMoney(customQuotedValue)}
-              </Text>
-            </View>
-          </View>
-
-          {/* PAYMENTS */}
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Payments</Text>
-
-            <View style={styles.highlightRow}>
-              <Text style={styles.highlightLabel}>Total Paid</Text>
-              <Text style={styles.moneyHighlight}>
-                {formatMoney(totalPaid)}
-              </Text>
-            </View>
-
-            <ReportRow
-              label="Deposits Collected"
-              value={formatMoney(totalDeposits)}
-            />
-
-            <ReportRow
-              label="Balance Payments"
-              value={formatMoney(totalBalancePayments)}
-            />
-
-            <ReportRow
-              label="Pending Payments"
-              value={pendingPayments.length}
-            />
-
-            <ReportRow
-              label="Outstanding Balance"
-              value={formatMoney(totalOutstanding)}
-              highlight
-            />
-
-            <ReportRow
-              label="Total Paid Transactions"
-              value={paidPayments.length}
-            />
-          </View>
-
-          {/* PRODUCTION */}
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Production</Text>
-
-            <ReportRow label="Assigned" value={productionCounts.assigned} />
-            <ReportRow label="Cutting" value={productionCounts.cutting} />
-            <ReportRow label="Sewing" value={productionCounts.sewing} />
-            <ReportRow label="Fitting" value={productionCounts.fitting} />
-            <ReportRow label="Finishing" value={productionCounts.finishing} />
-            <ReportRow
-              label="Ready for Pickup"
-              value={productionCounts.ready_for_pickup}
-            />
-            <ReportRow label="Completed" value={productionCounts.completed} />
-          </View>
-
-          {/* RECENT ORDERS */}
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Recent Orders</Text>
-
-            {recentOrders.length === 0 ? (
-              <Text style={styles.emptyText}>No orders yet.</Text>
-            ) : (
-              recentOrders.map((order, index) => (
-                <View
-                  key={`${order.type}-${order.id}`}
-                  style={styles.listRow}
-                >
-                  <View style={styles.listMain}>
-                    <Text style={styles.listTitle}>
-                      {order.type} Order
-                    </Text>
-                    <Text style={styles.listId}>
-                      {order.id.slice(0, 8)}...
-                    </Text>
-                    <Text style={styles.listDate}>
-                      {formatDate(order.date)}
-                    </Text>
-                  </View>
-
-                  <View style={styles.listRight}>
-                    <Text style={styles.statusText}>
-                      {formatLabel(order.status || 'Unknown')}
-                    </Text>
-                  </View>
-
-                  {index !== recentOrders.length - 1 && (
-                    <View style={styles.rowDivider} />
-                  )}
+                  <Text style={styles.recentStatus}>
+                    {formatStatus(order.status)}
+                  </Text>
                 </View>
-              ))
-            )}
-          </View>
 
-          {/* RECENT PAYMENTS */}
+                <Text style={styles.recentAmount}>
+                  {formatCurrency(order.amount)}
+                </Text>
+              </View>
+            ))
+          )}
+        </View>
 
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Recent Payments</Text>
+        <View style={styles.reportCard}>
+          <Text style={styles.cardTitle}>Recent Payments</Text>
 
-            {recentPayments.length === 0 ? (
-              <Text style={styles.emptyText}>No payments yet.</Text>
-            ) : (
-              recentPayments.map((payment, index) => (
-                <View key={payment.id} style={styles.listRow}>
-                  <View style={styles.listMain}>
-                    <Text style={styles.listTitle}>
-                      {formatLabel(payment.payment_type || 'Payment')}
-                    </Text>
+          {reportData.recentPayments.length === 0 ? (
+            <Text style={styles.emptyText}>No payments available.</Text>
+          ) : (
+            reportData.recentPayments.map((payment, index) => (
+              <View
+                key={payment.id}
+                style={[
+                  styles.recentRow,
+                  index === reportData.recentPayments.length - 1 &&
+                    styles.lastReportRow,
+                ]}
+              >
+                <View style={styles.recentInfo}>
+                  <Text style={styles.recentTitle}>
+                    {formatStatus(payment.payment_type)} Payment
+                  </Text>
 
-                    <Text style={styles.listId}>
-                      {payment.order_id
-                        ? `Order ${payment.order_id.slice(0, 8)}...`
-                        : payment.custom_order_id
-                        ? `Custom ${payment.custom_order_id.slice(0, 8)}...`
-                        : 'No order'}
-                    </Text>
+                  <Text style={styles.recentSubtitle}>
+                    #{payment.id.slice(0, 8)} · {formatDate(payment.created_at)}
+                  </Text>
 
-                    <Text style={styles.listDate}>
-                      {formatDate(payment.created_at)}
-                    </Text>
-                  </View>
-
-                  <View style={styles.listRight}>
-                    <Text style={styles.paymentAmount}>
-                      {formatMoney(Number(payment.amount || 0))}
-                    </Text>
-                    <Text style={styles.paymentStatus}>
-                      {formatLabel(payment.status || 'Unknown')}
-                    </Text>
-                  </View>
-
-                  {index !== recentPayments.length - 1 && (
-                    <View style={styles.rowDivider} />
-                  )}
+                  <Text style={styles.recentStatus}>
+                    {formatStatus(payment.status)}
+                  </Text>
                 </View>
-              ))
-            )}
-          </View>
 
-          <Text style={styles.footerText}>
-            Reports are based on the current order, payment, and production records.
+                <Text style={styles.recentAmount}>
+                  {formatCurrency(toNumber(payment.amount))}
+                </Text>
+              </View>
+            ))
+          )}
+        </View>
+
+        <View style={styles.noteContainer}>
+          <Ionicons
+            name="information-circle-outline"
+            size={18}
+            color={DARK_PINK}
+          />
+
+          <Text style={styles.noteText}>
+            Order values and quoted values are not the same as actual
+            payments received. Payment totals include only transactions
+            marked as paid.
           </Text>
         </View>
-      </ScrollView>
-    </View>
+
+        <Text style={styles.footerText}>
+          Pink Blush Garment Order and Production Management System
+        </Text>
+      </View>
+    </ScrollView>
   );
-}
-
-type ReportRowProps = {
-  label: string;
-  value: string | number;
-  highlight?: boolean;
-};
-
-function ReportRow({
-  label,
-  value,
-  highlight = false,
-}: ReportRowProps) {
-  return (
-    <View style={styles.reportRow}>
-      <Text
-        style={[
-          styles.reportLabel,
-          highlight && styles.reportLabelHighlight,
-        ]}
-      >
-        {label}
-      </Text>
-
-      <Text
-        style={[
-          styles.reportValue,
-          highlight && styles.reportValueHighlight,
-        ]}
-      >
-        {value}
-      </Text>
-    </View>
-  );
-}
-
-function ReportDivider() {
-  return <View style={styles.sectionDivider} />;
 }
 
 const styles = StyleSheet.create({
@@ -1168,282 +957,311 @@ const styles = StyleSheet.create({
     backgroundColor: BACKGROUND,
   },
 
-  content: {
-    paddingHorizontal: 16,
-    paddingTop: 20,
+  scrollContent: {
+    flexGrow: 1,
     paddingBottom: 35,
-    alignItems: 'center',
   },
 
-  reportContent: {
+  content: {
     width: '100%',
-    maxWidth: 600,
+    maxWidth: 700,
+    alignSelf: 'center',
+    paddingHorizontal: 18,
+    paddingTop: 20,
   },
 
-  loadingContainer: {
+  centerContainer: {
     flex: 1,
     backgroundColor: BACKGROUND,
-    alignItems: 'center',
     justifyContent: 'center',
+    alignItems: 'center',
+    padding: 25,
   },
 
   loadingText: {
-    marginTop: 10,
+    color: MUTED,
     fontSize: 14,
-    color: TEXT_MUTED,
+    marginTop: 12,
   },
 
   header: {
-    marginBottom: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 22,
   },
 
-  title: {
-    fontSize: 24,
+  headerTitle: {
+    fontSize: 25,
     fontWeight: '800',
-    color: TEXT_DARK,
+    color: TEXT,
   },
 
-  subtitle: {
+  headerSubtitle: {
     fontSize: 13,
-    color: TEXT_MUTED,
-    marginTop: 6,
-    lineHeight: 19,
+    color: MUTED,
+    marginTop: 5,
   },
 
-  exportSection: {
-    marginBottom: 25,
+  headerIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 15,
+    backgroundColor: LIGHT_PINK,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 
-  exportTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: TEXT_DARK,
-    marginBottom: 10,
-  },
-
-  exportButtons: {
+  exportContainer: {
     flexDirection: 'row',
     gap: 10,
+    marginBottom: 25,
   },
 
   exportButton: {
     flex: 1,
     minHeight: 46,
     backgroundColor: DARK_PINK,
-    borderRadius: 8,
+    borderRadius: 12,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 12,
+    gap: 8,
+    paddingHorizontal: 10,
   },
 
-  csvButton: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: PINK,
-  },
-
-  exportButtonText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-
-  csvButtonText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: DARK_PINK,
-  },
 
   disabledButton: {
     opacity: 0.6,
   },
 
-  exportHint: {
-    fontSize: 11,
-    color: TEXT_MUTED,
-    marginTop: 8,
+  exportButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
   },
 
-  section: {
-    marginBottom: 27,
-  },
-
-  sectionTitle: {
-    fontSize: 17,
+  sectionHeading: {
+    color: TEXT,
+    fontSize: 18,
     fontWeight: '800',
-    color: TEXT_DARK,
-    marginBottom: 12,
+    marginBottom: 13,
+    marginTop: 3,
   },
 
-  highlightRow: {
+  summaryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 25,
+  },
+
+  summaryCard: {
+    width: '48%',
+    flexGrow: 1,
+    flexBasis: '45%',
+    minWidth: 135,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 16,
+    padding: 14,
+  },
+
+  summaryCardWide: {
+    flexBasis: '45%',
+  },
+
+  summaryTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+
+  summaryIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: LIGHT_PINK,
+    justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 11,
-    gap: 10,
   },
 
-  highlightLabel: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '700',
-    color: TEXT_DARK,
+  summaryTitle: {
+    color: MUTED,
+    fontSize: 12,
+    fontWeight: '600',
   },
 
-  highlightValue: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: DARK_PINK,
-  },
-
-  moneyHighlight: {
+  summaryValue: {
+    color: TEXT,
     fontSize: 17,
     fontWeight: '800',
+    marginTop: 5,
+  },
+
+  summaryDescription: {
+    color: MUTED,
+    fontSize: 10,
+    marginTop: 5,
+  },
+
+  reportCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: BORDER,
+    padding: 16,
+    marginBottom: 15,
+  },
+
+  cardTitle: {
     color: DARK_PINK,
-    flexShrink: 1,
-    textAlign: 'right',
+    fontSize: 15,
+    fontWeight: '800',
+    marginBottom: 12,
   },
 
   reportRow: {
     minHeight: 39,
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 8,
-    gap: 12,
+    justifyContent: 'space-between',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F8EDF1',
+    paddingVertical: 9,
+    gap: 10,
+  },
+
+  lastReportRow: {
+    borderBottomWidth: 0,
   },
 
   reportLabel: {
+    color: MUTED,
+    fontSize: 12,
     flex: 1,
-    fontSize: 13,
-    color: TEXT_MUTED,
   },
 
   reportValue: {
-    fontSize: 13,
+    color: TEXT,
+    fontSize: 12,
     fontWeight: '700',
-    color: TEXT_DARK,
     textAlign: 'right',
     flexShrink: 0,
   },
 
-  reportLabelHighlight: {
-    color: DARK_PINK,
-    fontWeight: '700',
-  },
-
-  reportValueHighlight: {
-    color: DARK_PINK,
-    fontWeight: '800',
-  },
-
-  sectionDivider: {
-    height: 1,
-    backgroundColor: DIVIDER,
-    marginVertical: 9,
-  },
-
-  totalRow: {
+  recentRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F8EDF1',
+    paddingVertical: 12,
     gap: 10,
-    paddingVertical: 11,
   },
 
-  totalLabel: {
+  recentInfo: {
     flex: 1,
+  },
+
+  recentTitle: {
+    color: TEXT,
     fontSize: 13,
     fontWeight: '700',
-    color: TEXT_DARK,
   },
 
-  totalValue: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: DARK_PINK,
-    textAlign: 'right',
-  },
-
-  listRow: {
-    position: 'relative',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 14,
-    gap: 12,
-  },
-
-  listMain: {
-    flex: 1,
-    minWidth: 0,
-  },
-
-  listTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: TEXT_DARK,
-  },
-
-  listId: {
-    fontSize: 12,
-    color: TEXT_MUTED,
-    marginTop: 4,
-  },
-
-  listDate: {
+  recentSubtitle: {
+    color: MUTED,
     fontSize: 11,
-    color: TEXT_MUTED,
     marginTop: 4,
   },
 
-  listRight: {
-    alignItems: 'flex-end',
-    justifyContent: 'center',
-    maxWidth: '45%',
-  },
-
-  statusText: {
-    fontSize: 12,
-    fontWeight: '700',
+  recentStatus: {
     color: DARK_PINK,
-    textAlign: 'right',
-  },
-
-  paymentAmount: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: DARK_PINK,
-    textAlign: 'right',
-  },
-
-  paymentStatus: {
     fontSize: 11,
-    color: TEXT_MUTED,
-    marginTop: 4,
-    textAlign: 'right',
+    fontWeight: '700',
+    marginTop: 5,
   },
 
-  rowDivider: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 1,
-    backgroundColor: DIVIDER,
+  recentAmount: {
+    color: TEXT,
+    fontSize: 12,
+    fontWeight: '800',
+    textAlign: 'right',
   },
 
   emptyText: {
+    color: MUTED,
     fontSize: 13,
-    color: TEXT_MUTED,
-    paddingVertical: 12,
+    textAlign: 'center',
+    paddingVertical: 15,
+  },
+
+  noteContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: LIGHT_PINK,
+    borderRadius: 12,
+    padding: 13,
+    gap: 9,
+    marginTop: 2,
+  },
+
+  noteText: {
+    flex: 1,
+    color: '#805366',
+    fontSize: 11,
+    lineHeight: 17,
   },
 
   footerText: {
+    color: MUTED,
+    fontSize: 10,
     textAlign: 'center',
-    fontSize: 11,
-    color: TEXT_MUTED,
-    marginTop: 5,
-    lineHeight: 17,
+    marginTop: 22,
+  },
+
+  errorIcon: {
+    width: 70,
+    height: 70,
+    borderRadius: 22,
+    backgroundColor: LIGHT_PINK,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+
+  errorTitle: {
+    color: TEXT,
+    fontSize: 18,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+
+  errorMessage: {
+    color: MUTED,
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 8,
+    lineHeight: 19,
+  },
+
+  retryButton: {
+    backgroundColor: DARK_PINK,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 22,
+    paddingVertical: 12,
+    borderRadius: 12,
+    marginTop: 20,
+  },
+
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
   },
 });

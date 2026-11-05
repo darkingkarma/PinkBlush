@@ -9,6 +9,7 @@ import {
   Text,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useFocusEffect, useRoute } from '@react-navigation/native';
@@ -322,10 +323,11 @@ const getId = (record: any, keys: string[]) => {
   const value = getField(record, keys);
   return value ? String(value) : null;
 };
+
 async function markOrderNotificationsAsRead(
   currentOrderId: string,
   currentOrderType: OrderType,
-  userId: string,
+  userId: string
 ) {
   try {
     let notificationQuery = supabase
@@ -340,12 +342,12 @@ async function markOrderNotificationsAsRead(
     if (currentOrderType === 'custom') {
       notificationQuery = notificationQuery.eq(
         'custom_order_id',
-        currentOrderId,
+        currentOrderId
       );
     } else {
       notificationQuery = notificationQuery.eq(
         'order_id',
-        currentOrderId,
+        currentOrderId
       );
     }
 
@@ -354,18 +356,21 @@ async function markOrderNotificationsAsRead(
     if (error) {
       console.warn(
         'Unable to mark order notifications as read:',
-        error.message,
+        error.message
       );
     }
   } catch (error) {
     console.warn(
       'Notification read update failed:',
-      error,
+      error
     );
   }
 }
+
 export default function ManageOrderScreen() {
   const route = useRoute<any>();
+  const { width: screenWidth } = useWindowDimensions();
+  const isWideScreen = screenWidth >= 768;
 
   const { orderId, orderType } = route.params as {
     orderId: string;
@@ -385,7 +390,7 @@ export default function ManageOrderScreen() {
     useState<ProductionRecord | null>(null);
 
   const [selectedTailorId, setSelectedTailorId] = useState('');
-  const [selectedStage, setSelectedStage] = useState('assigned');
+  const [selectedStage, setSelectedStage] = useState('cutting');
 
   const [depositPayment, setDepositPayment] =
     useState<DepositPaymentStatus | null>(null);
@@ -802,24 +807,22 @@ export default function ManageOrderScreen() {
       if (productionResult.error) throw productionResult.error;
 
       if (!orderResult.data) {
-            throw new Error('This order could not be found.');
-          }
+        throw new Error('This order could not be found.');
+      }
 
-          // Get the currently logged-in staff account.
-          const {
-            data: { user },
-            error: userError,
-          } = await supabase.auth.getUser();
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-          if (userError || !user) {
-            throw new Error('Please log in again.');
-          }
+      if (userError || !user) {
+        throw new Error('Please log in again.');
+      }
 
-          // Mark only notifications belonging to this order as read.
-          await markOrderNotificationsAsRead(
-            orderId,
-            orderType,
-        user.id,
+      await markOrderNotificationsAsRead(
+        orderId,
+        orderType,
+        user.id
       );
 
       const orderData = orderResult.data;
@@ -849,7 +852,19 @@ export default function ManageOrderScreen() {
       setProduction(productionData);
 
       setSelectedTailorId(assigned?.tailor_id ?? '');
-      setSelectedStage(productionData?.status ?? 'assigned');
+
+      const currentStage = productionData?.status ?? 'assigned';
+      const currentStageIndex = STAGES.findIndex(
+        (stage) => stage.value === currentStage
+      );
+
+      const nextStage =
+        currentStageIndex >= 0 &&
+        currentStageIndex < STAGES.length - 1
+          ? STAGES[currentStageIndex + 1].value
+          : 'completed';
+
+      setSelectedStage(nextStage);
 
       setFittingDate(
         orderData.fitting_date
@@ -914,7 +929,6 @@ export default function ManageOrderScreen() {
     }
   }, [orderId, orderType]);
 
-  // Accept a pending catalog order.
   const acceptCatalogOrder = () => {
     if (orderType !== 'catalog') return;
 
@@ -1273,7 +1287,6 @@ export default function ManageOrderScreen() {
     setSavingAssignment(true);
 
     try {
-      // Verify acceptance before creating an initial assignment.
       if (!assignment) {
         const statusTable =
           orderType === 'catalog' ? 'orders' : 'custom_orders';
@@ -1394,146 +1407,194 @@ export default function ManageOrderScreen() {
     }
   };
 
-  
-    const updateStage = async () => {
-        if (!assignment) {
-            Alert.alert(
-                'No Tailor Assigned',
-                'Please assign a tailor before updating production.'
-            );
-            return;
+  // allowSkip is only true after the staff member confirms a skipped stage.
+  const updateStage = async (allowSkip = false) => {
+    if (!assignment) {
+      Alert.alert(
+        'No Tailor Assigned',
+        'Please assign a tailor before updating production.'
+      );
+      return;
+    }
+
+    if (!selectedStage) {
+      Alert.alert(
+        'Select a Stage',
+        'Please select a production stage.'
+      );
+      return;
+    }
+
+    if (productionStatus === 'completed') {
+      Alert.alert(
+        'Production Completed',
+        'This order has already been completed. Its production stage cannot be changed.'
+      );
+      return;
+    }
+
+    const currentStage = production?.status ?? 'assigned';
+    const currentIndex = STAGES.findIndex(
+      (stage) => stage.value === currentStage
+    );
+    const selectedIndex = STAGES.findIndex(
+      (stage) => stage.value === selectedStage
+    );
+
+    if (selectedIndex === -1) {
+      Alert.alert(
+        'Invalid Stage',
+        'Please select a valid production stage.'
+      );
+      return;
+    }
+
+    if (selectedIndex <= currentIndex) {
+      Alert.alert(
+        'Invalid Stage',
+        'You cannot move production backward or select the current stage again.'
+      );
+      return;
+    }
+
+    if (selectedIndex > currentIndex + 1 && !allowSkip) {
+      Alert.alert(
+        'Confirm Stage Skip',
+        `The current stage is ${getStageLabel(
+          currentStage
+        )}. You are about to skip one or more production stages and move directly to ${getStageLabel(
+          selectedStage
+        )}. Are you sure you want to continue?`,
+        [
+          {
+            text: 'Cancel',
+            style: 'cancel',
+          },
+          {
+            text: 'Continue',
+            onPress: () => {
+              void updateStage(true);
+            },
+          },
+        ]
+      );
+      return;
+    }
+
+    setSavingStage(true);
+
+    try {
+      const paymentStatus = await checkDepositPayment(
+        orderId,
+        orderType,
+        order
+      );
+
+      setDepositPayment(paymentStatus);
+
+      if (!paymentStatus.isPaid) {
+        Alert.alert(
+          'Deposit Not Yet Paid',
+          'Production cannot proceed until the required deposit is confirmed as paid.'
+        );
+        return;
+      }
+
+      if (selectedStage === 'completed') {
+        const latestCash = await checkCashBalance(
+          orderId,
+          orderType,
+          order,
+          paymentStatus.paidAmount
+        );
+
+        setCashBalance(latestCash);
+
+        if (!latestCash.isPaid) {
+          Alert.alert(
+            'Balance Not Yet Paid',
+            `The remaining balance of ${formatMoney(
+              latestCash.remainingAmount
+            )} must be collected in cash before marking this order as completed.`
+          );
+          return;
         }
+      }
 
-        if (!selectedStage) {
-            Alert.alert(
-                'Select a Stage',
-                'Please select a production stage.'
-            );
-            return;
-        }
+      const now = new Date().toISOString();
 
-        if (productionStatus === 'completed') {
-            Alert.alert(
-                'Production Completed',
-                'This order has already been completed. Its production stage cannot be changed.'
-            );
-            return;
-        }
+      const values: any = {
+        tailor_id: assignment.tailor_id,
+        order_id: orderType === 'catalog' ? orderId : null,
+        custom_order_id:
+          orderType === 'custom' ? orderId : null,
+        status: selectedStage,
+        updated_at: now,
+      };
 
-        setSavingStage(true);
+      if (selectedStage !== 'assigned' && !production?.started_at) {
+        values.started_at = now;
+      }
 
-        try {
-            const paymentStatus = await checkDepositPayment(
-                orderId,
-                orderType,
-                order
-            );
+      if (selectedStage === 'completed') {
+        values.completed_at = now;
+      } else {
+        values.completed_at = null;
+      }
 
-            setDepositPayment(paymentStatus);
+      const result = production
+        ? await supabase
+            .from('production_tracking')
+            .update(values)
+            .eq('id', production.id)
+        : await supabase
+            .from('production_tracking')
+            .insert(values);
 
-            if (!paymentStatus.isPaid) {
-            Alert.alert(
-                'Deposit Not Yet Paid',
-                'Production cannot proceed until the required deposit is confirmed as paid.'
-            );
-            return;
-            }
+      if (result.error) throw result.error;
 
-            if (selectedStage === 'completed') {
-                const latestCash = await checkCashBalance(
-                    orderId,
-                    orderType,
-                    order,
-                    paymentStatus.paidAmount
-            );
+      let mainOrderStatus = 'in_production';
 
-            setCashBalance(latestCash);
+      if (selectedStage === 'fitting') {
+        mainOrderStatus =
+          orderType === 'custom'
+            ? 'ready_for_fitting'
+            : 'in_production';
+      } else if (selectedStage === 'ready_for_pickup') {
+        mainOrderStatus = 'ready_for_release';
+      } else if (selectedStage === 'completed') {
+        mainOrderStatus = 'completed';
+      }
 
-            if (!latestCash.isPaid) {
-                Alert.alert(
-                    'Balance Not Yet Paid',
-                    `The remaining balance of ${formatMoney(
-                        latestCash.remainingAmount
-                    )} must be collected in cash before marking this order as completed.`
-                );
-                return;
-            }
-            }
+      const statusTable =
+        orderType === 'catalog' ? 'orders' : 'custom_orders';
 
-            const now = new Date().toISOString();
+      const { error: statusError } = await supabase
+        .from(statusTable)
+        .update({
+          status: mainOrderStatus,
+        })
+        .eq('id', orderId);
 
-            const values: any = {
-                tailor_id: assignment.tailor_id,
-                order_id: orderType === 'catalog' ? orderId : null,
-                custom_order_id:
-                orderType === 'custom' ? orderId : null,
-                status: selectedStage,
-                updated_at: now,
-            };
+      if (statusError) throw statusError;
 
-            if (selectedStage !== 'assigned' && !production?.started_at) {
-                values.started_at = now;
-            }
+      Alert.alert(
+        'Success',
+        `Production stage updated to ${getStageLabel(
+          selectedStage
+        )} and order status synchronized.`
+      );
 
-            if (selectedStage === 'completed') {
-                values.completed_at = now;
-            } else {
-                values.completed_at = null;
-            }
-
-            const result = production
-                ? await supabase
-                    .from('production_tracking')
-                    .update(values)
-                    .eq('id', production.id)
-                : await supabase
-                    .from('production_tracking')
-                    .insert(values);
-
-            if (result.error) throw result.error;
-
-            // Synchronize the main order status with production status.
-            let mainOrderStatus = 'in_production';
-
-            if (selectedStage === 'fitting') {
-                mainOrderStatus =
-                    orderType === 'custom'
-                    ? 'ready_for_fitting'
-                    : 'in_production';
-            } else if (selectedStage === 'ready_for_pickup') {
-                mainOrderStatus = 'ready_for_release';
-            } else if (selectedStage === 'completed') {
-                mainOrderStatus = 'completed';
-            }
-
-            const statusTable =
-                orderType === 'catalog' ? 'orders' : 'custom_orders';
-
-            const { error: statusError } = await supabase
-                .from(statusTable)
-                .update({
-                    status: mainOrderStatus,
-            })
-            .eq('id', orderId);
-
-            if (statusError) throw statusError;
-
-            Alert.alert(
-                'Success',
-                `Production stage updated to ${getStageLabel(selectedStage)} and order status synchronized.`
-            );
-
-            await loadData();
-        } catch (error: any) {
-            Alert.alert(
-                'Update Failed',
-                error?.message ?? 'Unable to update production stage.'
-            );
-        } finally {
-            setSavingStage(false);
-        }
-    };
-
+      await loadData();
+    } catch (error: any) {
+      Alert.alert(
+        'Update Failed',
+        error?.message ?? 'Unable to update production stage.'
+      );
+    } finally {
+      setSavingStage(false);
+    }
+  };
 
   const orderTitle =
     orderType === 'catalog'
@@ -1561,7 +1622,7 @@ export default function ManageOrderScreen() {
 
         <TouchableOpacity
           style={styles.primaryButton}
-          onPress={loadData}
+          onPress={() => void loadData()}
         >
           <Text style={styles.buttonText}>Try Again</Text>
         </TouchableOpacity>
@@ -1572,7 +1633,10 @@ export default function ManageOrderScreen() {
   return (
     <ScrollView
       style={styles.container}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[
+        styles.content,
+        isWideScreen && styles.contentWide,
+      ]}
     >
       <View style={styles.header}>
         <Text style={styles.heading}>Manage Order</Text>
@@ -1680,7 +1744,6 @@ export default function ManageOrderScreen() {
         )}
       </View>
 
-      {/* CATALOG ORDER APPROVAL */}
       {orderType === 'catalog' &&
         currentOrderStatus === 'pending' && (
           <View style={styles.card}>
@@ -1849,9 +1912,8 @@ export default function ManageOrderScreen() {
               </Text>
 
               <Text style={styles.measurementDescription}>
-                Original measurements saved when this order was placed.
-                These values remain unchanged even if the customer
-                updates their profile.
+                No measurement snapshot was saved for this order.
+                Please contact the customer if measurements are required.
               </Text>
             </View>
           </View>
@@ -2088,7 +2150,6 @@ export default function ManageOrderScreen() {
         </View>
       )}
 
-      {/* TAILOR ASSIGNMENT */}
       {showAssignmentSection && (
         <View style={styles.card}>
           <View style={styles.sectionHeader}>
@@ -2205,7 +2266,6 @@ export default function ManageOrderScreen() {
         </View>
       )}
 
-      {/* PRODUCTION TRACKING */}
       {showProductionSection && (
         <View style={styles.card}>
           <View style={styles.sectionHeader}>
@@ -2243,10 +2303,19 @@ export default function ManageOrderScreen() {
           ) : (
             <>
               <Dropdown
-                label="Select Production Stage"
+                label="Select Next Production Stage"
                 value={selectedStage}
                 placeholder="Choose a production stage"
-                options={STAGES.map((stage) => ({
+                options={STAGES.filter(
+                  (stage) =>
+                    STAGES.findIndex(
+                      (item) => item.value === stage.value
+                    ) >
+                    STAGES.findIndex(
+                      (item) =>
+                        item.value === (production?.status ?? 'assigned')
+                    )
+                ).map((stage) => ({
                   label: stage.label,
                   value: stage.value,
                 }))}
@@ -2260,12 +2329,17 @@ export default function ManageOrderScreen() {
                 disabled={savingStage}
               />
 
+              <Text style={styles.stageHint}>
+                Follow the production sequence. If you need to skip a
+                stage, the app will ask you to confirm.
+              </Text>
+
               <TouchableOpacity
                 style={[
                   styles.primaryButton,
                   savingStage && styles.disabled,
                 ]}
-                onPress={updateStage}
+                onPress={() => void updateStage()}
                 disabled={savingStage}
               >
                 {savingStage ? (
@@ -2340,7 +2414,7 @@ export default function ManageOrderScreen() {
                           Platform.OS === 'ios' ? 'spinner' : 'default'
                         }
                         minimumDate={getToday()}
-                        onValueChange={(event, selectedDate) => {
+                        onChange={(event, selectedDate) => {
                           if (selectedDate) {
                             const nextDate = new Date(selectedDate);
 
@@ -2438,7 +2512,7 @@ export default function ManageOrderScreen() {
                         display={
                           Platform.OS === 'ios' ? 'spinner' : 'default'
                         }
-                        onValueChange={(event, selectedDate) => {
+                        onChange={(event, selectedDate) => {
                           if (selectedDate) {
                             const nextDate = new Date(
                               fittingDate ?? getToday()
@@ -2579,7 +2653,7 @@ export default function ManageOrderScreen() {
                           Platform.OS === 'ios' ? 'spinner' : 'default'
                         }
                         minimumDate={getMinimumPickupDate()}
-                        onValueChange={(event, selectedDate) => {
+                        onChange={(event, selectedDate) => {
                           if (selectedDate) {
                             const nextDate = new Date(selectedDate);
 
@@ -2671,7 +2745,7 @@ export default function ManageOrderScreen() {
                         display={
                           Platform.OS === 'ios' ? 'spinner' : 'default'
                         }
-                        onValueChange={(event, selectedDate) => {
+                        onChange={(event, selectedDate) => {
                           if (selectedDate) {
                             const nextDate = new Date(
                               pickupDate ?? getMinimumPickupDate()
@@ -2783,6 +2857,11 @@ const styles = StyleSheet.create({
   content: {
     padding: 16,
     paddingBottom: 35,
+  },
+  contentWide: {
+    width: '100%',
+    maxWidth: 900,
+    alignSelf: 'center',
   },
   center: {
     flex: 1,
@@ -3117,6 +3196,12 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginTop: 5,
   },
+  stageHint: {
+    color: '#98717E',
+    fontSize: 10,
+    lineHeight: 15,
+    marginTop: 8,
+  },
   dropdownContainer: {
     marginTop: 13,
   },
@@ -3203,7 +3288,8 @@ const styles = StyleSheet.create({
     gap: 9,
   },
   measurementItem: {
-    width: '48%',
+    flexGrow: 1,
+    flexBasis: '46%',
     backgroundColor: '#FFF4F7',
     borderRadius: 9,
     padding: 11,

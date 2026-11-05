@@ -1,7 +1,8 @@
+
 import { useCallback, useEffect, useState } from 'react';
+
 import {
   ActivityIndicator,
-  Alert,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -9,6 +10,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
 
 import { useNavigation } from '@react-navigation/native';
@@ -42,7 +44,6 @@ type ProductionProgress = {
   updated_at: string | null;
 };
 
-// CATALOG ORDER STATUSES
 type FilterType =
   | 'All'
   | 'Pending'
@@ -62,7 +63,6 @@ const FILTERS: FilterType[] = [
   'Cancelled',
 ];
 
-// PRODUCTION TRACKING STATUSES
 const PROGRESS_FILTERS = [
   'All',
   'assigned',
@@ -94,7 +94,6 @@ const formatMoney = (
   )}`;
 };
 
-// NORMALIZE STATUS VALUES
 const normalizeStatus = (
   status: string | null | undefined
 ) =>
@@ -104,7 +103,6 @@ const normalizeStatus = (
     .trim()
     .replace(/\s+/g, ' ');
 
-// NORMALIZE PRODUCTION STATUS FOR FILTERING
 const normalizeProgress = (
   status: string | null | undefined
 ) =>
@@ -113,7 +111,6 @@ const normalizeProgress = (
     .trim()
     .replace(/[\s-]+/g, '_');
 
-// DISPLAY STATUS
 const displayStatus = (
   status: string | null | undefined
 ) => {
@@ -124,7 +121,6 @@ const displayStatus = (
   );
 };
 
-// CATALOG ORDER STATUS FILTERING
 const matchesFilter = (
   status: string | null | undefined,
   filter: FilterType
@@ -159,6 +155,10 @@ const matchesFilter = (
 
 export default function CatalogOrdersScreen() {
   const navigation = useNavigation<any>();
+  const { width } = useWindowDimensions();
+
+  // RESPONSIVE LAYOUT
+  const isWideScreen = width >= 750;
 
   const [orders, setOrders] = useState<CatalogOrder[]>([]);
 
@@ -174,10 +174,13 @@ export default function CatalogOrdersScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // LOAD CATALOG ORDERS
   const loadOrders = useCallback(async () => {
     try {
+      setLoadError(null);
+
       const { data: orderRows, error: ordersError } =
         await supabase
           .from('orders')
@@ -308,8 +311,7 @@ export default function CatalogOrdersScreen() {
     } catch (error: any) {
       console.error('Error loading catalog orders:', error);
 
-      Alert.alert(
-        'Unable to Load Orders',
+      setLoadError(
         error?.message ??
           'Something went wrong while loading catalog orders.'
       );
@@ -338,13 +340,11 @@ export default function CatalogOrdersScreen() {
 
   // FILTER ORDERS
   const filteredOrders = orders.filter((order) => {
-    // CATALOG ORDER STATUS FILTER
     const matchesStatus = matchesFilter(
       order.status,
       activeFilter
     );
 
-    // PRODUCTION PROGRESS FILTER
     const currentProgress = normalizeProgress(
       productionProgress[order.id]?.status
     );
@@ -353,7 +353,6 @@ export default function CatalogOrdersScreen() {
       progressFilter === 'All' ||
       currentProgress === normalizeProgress(progressFilter);
 
-    // SEARCH FILTER
     const search = searchQuery.trim().toLowerCase();
 
     const orderId = order.id.toLowerCase();
@@ -391,7 +390,13 @@ export default function CatalogOrdersScreen() {
       );
 
   // GET DEPOSIT PAYMENT
+  // PRIORITIZE A PAID DEPOSIT OVER PENDING OR FAILED PAYMENTS
   const getDepositPayment = (order: CatalogOrder) =>
+    order.payments.find(
+      (payment) =>
+        normalizeStatus(payment.payment_type) === 'deposit' &&
+        normalizeStatus(payment.status) === 'paid'
+    ) ??
     order.payments.find(
       (payment) =>
         normalizeStatus(payment.payment_type) === 'deposit'
@@ -545,7 +550,28 @@ export default function CatalogOrdersScreen() {
         }
         showsVerticalScrollIndicator={false}
       >
-        {filteredOrders.length === 0 ? (
+        {/* ERROR STATE */}
+        {loadError ? (
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyTitle}>
+              Unable to Load Orders
+            </Text>
+
+            <Text style={styles.emptyText}>
+              {loadError}
+            </Text>
+
+            <TouchableOpacity
+              style={styles.retryButton}
+              onPress={loadOrders}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.retryButtonText}>
+                Try Again
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : filteredOrders.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyTitle}>
               {searchQuery ||
@@ -581,7 +607,12 @@ export default function CatalogOrdersScreen() {
             )}
           </View>
         ) : (
-          <View style={styles.ordersGrid}>
+          <View
+            style={[
+              styles.ordersGrid,
+              isWideScreen && styles.ordersGridWide,
+            ]}
+          >
             {filteredOrders.map((order) => {
               const total = Number(order.total_amount ?? 0);
               const paidDeposit = getPaidDeposit(order);
@@ -598,7 +629,13 @@ export default function CatalogOrdersScreen() {
                 productionProgress[order.id]?.status || null;
 
               return (
-                <View key={order.id} style={styles.orderCard}>
+                <View
+                  key={order.id}
+                  style={[
+                    styles.orderCard,
+                    isWideScreen && styles.orderCardWide,
+                  ]}
+                >
                   {/* ORDER HEADER */}
                   <View style={styles.cardHeader}>
                     <View style={styles.cardTitleContainer}>
@@ -619,19 +656,23 @@ export default function CatalogOrdersScreen() {
                   </View>
 
                   {/* SUBMITTED DATE */}
-                    <Text style={styles.submittedDate}>
-                        Submitted{' '}
-                        {order.created_at
-                            ? new Date(order.created_at).toLocaleString('en-PH', {
-                                year: 'numeric',
-                                month: 'short',
-                                day: 'numeric',
-                                hour: 'numeric',
-                                minute: '2-digit',
-                                hour12: true,
-                            })
-                        : 'Date unavailable'}
-                    </Text>
+                  <Text style={styles.submittedDate}>
+                    Submitted{' '}
+                    {order.created_at
+                      ? new Date(order.created_at).toLocaleString(
+                          'en-PH',
+                          {
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric',
+                            hour: 'numeric',
+                            minute: '2-digit',
+                            hour12: true,
+                          }
+                        )
+                      : 'Date unavailable'}
+                  </Text>
+
                   {/* CURRENT PRODUCTION STAGE */}
                   <View style={styles.productionProgressBox}>
                     <Text style={styles.progressCardLabel}>
@@ -890,19 +931,34 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 7,
     paddingBottom: 25,
+    width: '100%',
+    maxWidth: 1200,
+    alignSelf: 'center',
   },
 
   ordersGrid: {
     width: '100%',
+    flexDirection: 'column',
+  },
+
+  ordersGridWide: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
   },
 
   orderCard: {
+    width: '100%',
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 14,
     marginBottom: 10,
     borderWidth: 1,
     borderColor: '#F1E3E8',
+  },
+
+  orderCardWide: {
+    width: '49%',
   },
 
   cardHeader: {
@@ -1128,5 +1184,19 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: DARK_PINK,
+  },
+
+  retryButton: {
+    backgroundColor: DARK_PINK,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+    marginTop: 15,
+  },
+
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '800',
   },
 });

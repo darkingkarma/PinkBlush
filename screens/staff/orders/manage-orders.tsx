@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -90,7 +89,6 @@ const PROGRESS_FILTERS = [
   'completed',
 ];
 
-// NORMALIZE ORDER STATUS
 const normalizeStatus = (status: string | null | undefined) =>
   (status ?? '')
     .toLowerCase()
@@ -98,14 +96,12 @@ const normalizeStatus = (status: string | null | undefined) =>
     .replace(/[_-]/g, ' ')
     .replace(/\s+/g, ' ');
 
-// NORMALIZE PRODUCTION STATUS
 const normalizeProgress = (status: string | null | undefined) =>
   (status ?? '')
     .toLowerCase()
     .trim()
     .replace(/[\s-]+/g, '_');
 
-// FORMAT STATUS FOR DISPLAY
 const formatStatus = (status: string) => {
   const normalized = normalizeStatus(status);
 
@@ -114,7 +110,6 @@ const formatStatus = (status: string) => {
   );
 };
 
-// MATCH CUSTOM ORDER FILTER
 const matchesOrderFilter = (
   status: string,
   selectedFilter: FilterType
@@ -124,37 +119,26 @@ const matchesOrderFilter = (
   switch (selectedFilter) {
     case 'All':
       return true;
-
     case 'Submitted':
       return normalized === 'submitted';
-
     case 'Under Review':
       return normalized === 'under review';
-
     case 'Quotation Sent':
       return normalized === 'quotation sent';
-
     case 'Accepted':
       return normalized === 'accepted';
-
     case 'In Production':
       return normalized === 'in production';
-
     case 'Ready for Fitting':
       return normalized === 'ready for fitting';
-
     case 'Ready for Release':
       return normalized === 'ready for release';
-
     case 'Completed':
       return normalized === 'completed';
-
     case 'Declined':
       return normalized === 'declined';
-
     case 'Cancelled':
       return normalized === 'cancelled';
-
     default:
       return true;
   }
@@ -163,6 +147,7 @@ const matchesOrderFilter = (
 export default function ManageOrdersScreen() {
   const navigation = useNavigation<any>();
   const { width } = useWindowDimensions();
+
   const isLargeScreen = width >= 700;
 
   const [orders, setOrders] = useState<CustomOrder[]>([]);
@@ -177,6 +162,7 @@ export default function ManageOrdersScreen() {
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [filter, setFilter] = useState<FilterType>('All');
   const [progressFilter, setProgressFilter] = useState('All');
@@ -185,7 +171,11 @@ export default function ManageOrdersScreen() {
   // LOAD CUSTOM ORDERS
   const loadOrders = useCallback(async (showLoader = true) => {
     try {
-      if (showLoader) setLoading(true);
+      if (showLoader) {
+        setLoading(true);
+      }
+
+      setLoadError(null);
 
       const { data, error } = await supabase
         .from('custom_orders')
@@ -211,11 +201,11 @@ export default function ManageOrdersScreen() {
 
       const orderData = (data || []) as CustomOrder[];
 
-      setOrders(orderData);
-
       const orderIds = orderData.map((order) => order.id);
 
       // LOAD LATEST PRODUCTION PROGRESS
+      let progressMap: Record<string, ProductionProgress> = {};
+
       if (orderIds.length > 0) {
         const { data: productionData, error: productionError } =
           await supabase
@@ -225,8 +215,6 @@ export default function ManageOrdersScreen() {
             .order('updated_at', { ascending: false });
 
         if (productionError) throw productionError;
-
-        const progressMap: Record<string, ProductionProgress> = {};
 
         (productionData || []).forEach((record: any) => {
           if (
@@ -239,10 +227,6 @@ export default function ManageOrdersScreen() {
             };
           }
         });
-
-        setProductionProgress(progressMap);
-      } else {
-        setProductionProgress({});
       }
 
       // LOAD CUSTOMER PROFILES
@@ -250,32 +234,33 @@ export default function ManageOrdersScreen() {
         ...new Set(orderData.map((order) => order.user_id)),
       ];
 
+      let profileMap: Record<string, CustomerProfile> = {};
+
       if (customerIds.length > 0) {
-        const { data: profiles, error: profileError } = await supabase
-          .from('profiles')
-          .select(
-            'id, username, full_name, contact_number, email, role'
-          )
-          .in('id', customerIds);
+        const { data: profiles, error: profileError } =
+          await supabase
+            .from('profiles')
+            .select(
+              'id, username, full_name, contact_number, email, role'
+            )
+            .in('id', customerIds);
 
         if (profileError) throw profileError;
-
-        const profileMap: Record<string, CustomerProfile> = {};
 
         (profiles || []).forEach((profile: CustomerProfile) => {
           profileMap[profile.id] = profile;
         });
-
-        setCustomerProfiles(profileMap);
-      } else {
-        setCustomerProfiles({});
       }
+
+      // UPDATE SCREEN DATA AFTER SUCCESSFUL LOAD
+      setOrders(orderData);
+      setProductionProgress(progressMap);
+      setCustomerProfiles(profileMap);
     } catch (error: any) {
       console.error('Error loading custom orders:', error);
 
-      Alert.alert(
-        'Error',
-        error.message || 'Unable to load custom orders.'
+      setLoadError(
+        error?.message || 'Unable to load custom orders. Please try again.'
       );
     } finally {
       setLoading(false);
@@ -292,6 +277,10 @@ export default function ManageOrdersScreen() {
     loadOrders(false);
   };
 
+  const handleRetry = () => {
+    loadOrders(true);
+  };
+
   // CUSTOMER INFORMATION
   const getCustomerName = (userId: string) => {
     const customer = customerProfiles[userId];
@@ -303,16 +292,11 @@ export default function ManageOrdersScreen() {
     );
   };
 
-  const getCustomerEmail = (userId: string) => {
-    return customerProfiles[userId]?.email || 'No email provided';
-  };
+  const getCustomerEmail = (userId: string) =>
+    customerProfiles[userId]?.email || 'No email provided';
 
-  const getCustomerContact = (userId: string) => {
-    return (
-      customerProfiles[userId]?.contact_number ||
-      'No contact number'
-    );
-  };
+  const getCustomerContact = (userId: string) =>
+    customerProfiles[userId]?.contact_number || 'No contact number';
 
   // STATUS COLORS
   const getStatusStyle = (status: string) => {
@@ -368,11 +352,17 @@ export default function ManageOrdersScreen() {
     })}`;
   };
 
-  // FORMAT DATE
+  // FORMAT DATE AND TIME
   const formatDate = (date: string | null) => {
     if (!date) return 'Not specified';
 
-    return new Date(date).toLocaleString('en-PH', {
+    const parsedDate = new Date(date);
+
+    if (Number.isNaN(parsedDate.getTime())) {
+      return 'Not specified';
+    }
+
+    return parsedDate.toLocaleString('en-PH', {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
@@ -380,6 +370,26 @@ export default function ManageOrdersScreen() {
       minute: '2-digit',
       hour12: true,
     });
+  };
+
+  // FORMAT DATE-ONLY FIELD
+  const formatPreferredDate = (date: string | null) => {
+    if (!date) return 'Not specified';
+
+    const [year, month, day] = date.split('-').map(Number);
+
+    if (!year || !month || !day) {
+      return 'Not specified';
+    }
+
+    return new Date(year, month - 1, day).toLocaleDateString(
+      'en-PH',
+      {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      }
+    );
   };
 
   // NAVIGATION
@@ -401,7 +411,6 @@ export default function ManageOrdersScreen() {
       filter
     );
 
-    // PRODUCTION PROGRESS FILTER
     const productionStatus = normalizeProgress(
       productionProgress[order.id]?.status
     );
@@ -410,7 +419,6 @@ export default function ManageOrdersScreen() {
       progressFilter === 'All' ||
       productionStatus === normalizeProgress(progressFilter);
 
-    // SEARCH FILTER
     const customer = customerProfiles[order.user_id];
     const search = searchQuery.trim().toLowerCase();
 
@@ -444,15 +452,12 @@ export default function ManageOrdersScreen() {
   const needsQuoteCount = orders.filter((order) => {
     const status = normalizeStatus(order.status);
 
-    return (
-      status === 'submitted' ||
-      status === 'under review'
-    );
+    return status === 'submitted' || status === 'under review';
   }).length;
 
   // ORDERS THAT CAN BE MANAGED
-  // Assignment and production eligibility are still checked
-  // inside ManageOrderScreen.
+  // Payment and assignment eligibility must still be checked
+  // inside ManageOrderScreen and by the database/backend.
   const manageableStatuses = [
     'accepted',
     'in_production',
@@ -562,17 +567,14 @@ export default function ManageOrdersScreen() {
             const selected = progressFilter === item;
 
             const label =
-              item === 'All'
-                ? 'All'
-                : formatStatus(item);
+              item === 'All' ? 'All' : formatStatus(item);
 
             return (
               <TouchableOpacity
                 key={item}
                 style={[
                   styles.progressFilterButton,
-                  selected &&
-                    styles.progressFilterButtonActive,
+                  selected && styles.progressFilterButtonActive,
                 ]}
                 onPress={() => setProgressFilter(item)}
                 activeOpacity={0.8}
@@ -580,8 +582,7 @@ export default function ManageOrdersScreen() {
                 <Text
                   style={[
                     styles.progressFilterText,
-                    selected &&
-                      styles.progressFilterTextActive,
+                    selected && styles.progressFilterTextActive,
                   ]}
                 >
                   {label}
@@ -606,6 +607,29 @@ export default function ManageOrdersScreen() {
         }
         showsVerticalScrollIndicator={false}
       >
+        {/* INLINE ERROR */}
+        {loadError && (
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorTitle}>
+              Unable to load orders
+            </Text>
+
+            <Text style={styles.errorText}>
+              {loadError}
+            </Text>
+
+            <TouchableOpacity
+              style={styles.retryButton}
+              onPress={handleRetry}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.retryButtonText}>
+                Retry
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {filteredOrders.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyTitle}>
@@ -649,12 +673,16 @@ export default function ManageOrdersScreen() {
             ]}
           >
             {filteredOrders.map((order) => {
-              const orderStatus = normalizeProgress(
-                order.status
-              );
+              const orderStatus = normalizeProgress(order.status);
 
               const canManageOrder =
                 manageableStatuses.includes(orderStatus);
+
+              const canReviewRequest = ![
+                'completed',
+                'declined',
+                'cancelled',
+              ].includes(orderStatus);
 
               const currentProgress =
                 productionProgress[order.id]?.status || null;
@@ -662,7 +690,10 @@ export default function ManageOrdersScreen() {
               return (
                 <View
                   key={order.id}
-                  style={styles.orderCard}
+                  style={[
+                    styles.orderCard,
+                    isLargeScreen && styles.orderCardLarge,
+                  ]}
                 >
                   <View style={styles.cardHeader}>
                     <View style={styles.cardTitleContainer}>
@@ -762,11 +793,11 @@ export default function ManageOrdersScreen() {
                     {order.needed_by_date ? (
                       <View style={styles.detailItem}>
                         <Text style={styles.infoLabel}>
-                          Needed By
+                          Preferred Needed-By Date
                         </Text>
 
                         <Text style={styles.infoValue}>
-                          {formatDate(order.needed_by_date)}
+                          {formatPreferredDate(order.needed_by_date)}
                         </Text>
                       </View>
                     ) : null}
@@ -800,7 +831,6 @@ export default function ManageOrdersScreen() {
                   )}
 
                   {/* STATUS NOTICES */}
-
                   {orderStatus === 'submitted' && (
                     <Text style={styles.productionNotice}>
                       Custom order request has been submitted and
@@ -810,8 +840,7 @@ export default function ManageOrdersScreen() {
 
                   {orderStatus === 'under_review' && (
                     <Text style={styles.productionNotice}>
-                      Custom order request is currently under
-                      review.
+                      Custom order request is currently under review.
                     </Text>
                   )}
 
@@ -865,19 +894,27 @@ export default function ManageOrdersScreen() {
 
                   {/* ACTIONS */}
                   <View style={styles.actionsContainer}>
-                    <TouchableOpacity
-                      style={styles.reviewButton}
-                      onPress={() => openReviewRequest(order)}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={styles.reviewButtonText}>
-                        Review Request
-                      </Text>
-                    </TouchableOpacity>
+                    {canReviewRequest && (
+                      <TouchableOpacity
+                        style={[
+                          styles.reviewButton,
+                          !canManageOrder && styles.fullWidthButton,
+                        ]}
+                        onPress={() => openReviewRequest(order)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.reviewButtonText}>
+                          Review Request
+                        </Text>
+                      </TouchableOpacity>
+                    )}
 
                     {canManageOrder && (
                       <TouchableOpacity
-                        style={styles.manageButton}
+                        style={[
+                          styles.manageButton,
+                          !canReviewRequest && styles.fullWidthButton,
+                        ]}
                         onPress={() => openManageOrder(order)}
                         activeOpacity={0.8}
                       >
@@ -908,6 +945,7 @@ const styles = StyleSheet.create({
     backgroundColor: BACKGROUND,
     alignItems: 'center',
     justifyContent: 'center',
+    padding: 20,
   },
 
   loadingText: {
@@ -1044,7 +1082,6 @@ const styles = StyleSheet.create({
 
   progressFilterTextActive: {
     color: '#FFFFFF',
-    fontWeight: '700',
   },
 
   listScroll: {
@@ -1052,6 +1089,8 @@ const styles = StyleSheet.create({
   },
 
   listContent: {
+    width: '100%',
+    alignItems: 'center',
     paddingHorizontal: 16,
     paddingTop: 7,
     paddingBottom: 25,
@@ -1062,18 +1101,25 @@ const styles = StyleSheet.create({
   },
 
   ordersGridLarge: {
-    maxWidth: 900,
+    maxWidth: 1100,
     alignSelf: 'center',
-    width: '100%',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
   },
 
   orderCard: {
+    width: '100%',
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 14,
     marginBottom: 10,
     borderWidth: 1,
     borderColor: '#F1E3E8',
+  },
+
+  orderCardLarge: {
+    width: '49%',
   },
 
   cardHeader: {
@@ -1162,12 +1208,14 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 7,
     marginTop: 10,
+    gap: 8,
   },
 
   progressCardLabel: {
     fontSize: 10,
     color: TEXT_MUTED,
     fontWeight: '600',
+    flex: 1,
   },
 
   progressCardValue: {
@@ -1178,6 +1226,7 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 5,
     overflow: 'hidden',
+    textAlign: 'center',
   },
 
   progressNotStarted: {
@@ -1233,6 +1282,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 8,
   },
 
   quotationLabel: {
@@ -1317,11 +1367,16 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
+  fullWidthButton: {
+    flex: 1,
+  },
+
   emptyContainer: {
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 55,
     paddingHorizontal: 20,
+    width: '100%',
   },
 
   emptyTitle: {
@@ -1351,5 +1406,44 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: DARK_PINK,
+  },
+
+  errorContainer: {
+    width: '100%',
+    maxWidth: 1100,
+    backgroundColor: '#FFF0F0',
+    borderWidth: 1,
+    borderColor: '#F3CACA',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 12,
+  },
+
+  errorTitle: {
+    color: '#A83232',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+
+  errorText: {
+    color: '#8E4A4A',
+    fontSize: 11,
+    lineHeight: 17,
+    marginTop: 5,
+  },
+
+  retryButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#B84444',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 7,
+    marginTop: 10,
+  },
+
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
   },
 });

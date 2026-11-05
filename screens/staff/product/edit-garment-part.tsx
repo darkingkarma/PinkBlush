@@ -1,28 +1,24 @@
-import {
-  useState,
-} from 'react';
+
+import { useState } from 'react';
 
 import {
+  ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
 
-import {
-  NativeStackScreenProps,
-} from '@react-navigation/native-stack';
+import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import {
-  supabase,
-} from '../../../supabase';
-
-import {
-  RootStackParamList,
-} from '../../../navigator';
+import { supabase } from '../../../supabase';
+import { RootStackParamList } from '../../../navigator';
 
 type Props = NativeStackScreenProps<
   RootStackParamList,
@@ -34,70 +30,84 @@ export default function EditGarmentPartScreen({
   route,
 }: Props) {
   const { part } = route.params;
+  const { width } = useWindowDimensions();
 
-  const [name, setName] =
-    useState(part.name);
+  const isWideScreen = width >= 768;
 
-  const [gender, setGender] =
-    useState(part.gender);
+  const [name, setName] = useState(part.name);
+  const [gender, setGender] = useState(part.gender);
+  const [price, setPrice] = useState(String(part.price));
+  const [description, setDescription] = useState(
+    part.description || '',
+  );
+  const [available, setAvailable] = useState(part.available);
 
-  const [price, setPrice] =
-    useState(String(part.price));
-
-  const [description, setDescription] =
-    useState(part.description || '');
-
-  const [available, setAvailable] =
-    useState(part.available);
+  const [saving, setSaving] = useState(false);
 
   const updatePart = async () => {
-    if (!name.trim()) {
+    if (saving) return;
+
+    const trimmedName = name.trim();
+    const trimmedPrice = price.trim();
+    const trimmedDescription = description.trim();
+
+    if (!trimmedName) {
       Alert.alert(
-        'Error',
-        'Please enter a part name.'
+        'Missing Information',
+        'Please enter a garment part name.',
       );
       return;
     }
 
-    if (!price.trim()) {
+    if (trimmedName.length < 2) {
       Alert.alert(
-        'Error',
-        'Please enter a price.'
+        'Invalid Name',
+        'The part name must contain at least 2 characters.',
       );
       return;
     }
 
-    const priceNumber =
-      Number(price);
-
-    if (isNaN(priceNumber)) {
+    if (!trimmedPrice) {
       Alert.alert(
-        'Error',
-        'Please enter a valid price.'
+        'Missing Information',
+        'Please enter a price.',
       );
       return;
     }
+
+    const priceNumber = Number(trimmedPrice);
+
+    if (!Number.isFinite(priceNumber) || priceNumber < 0) {
+      Alert.alert(
+        'Invalid Price',
+        'Please enter a valid price that is zero or greater.',
+      );
+      return;
+    }
+
+    if (trimmedDescription.length > 1000) {
+      Alert.alert(
+        'Description Too Long',
+        'The description must not exceed 1,000 characters.',
+      );
+      return;
+    }
+
+    setSaving(true);
 
     try {
-      const {
-        error,
-      } = await supabase
+      const { error } = await supabase
         .from('garment_parts')
         .update({
-          garment_id: part.garment_id,
-          name: name.trim(),
-          gender: gender,
+          name: trimmedName,
+          gender,
           price: priceNumber,
-          description:
-            description.trim() ||
-            null,
-          available: available,
+          description: trimmedDescription || null,
+          available,
         })
         .eq('id', part.id);
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       Alert.alert(
         'Success',
@@ -105,287 +115,509 @@ export default function EditGarmentPartScreen({
         [
           {
             text: 'OK',
-            onPress: () =>
-              navigation.goBack(),
+            onPress: () => navigation.goBack(),
           },
-        ]
+        ],
       );
     } catch (error: any) {
       Alert.alert(
-        'Error',
+        'Unable to Update Garment Part',
         error.message ||
-          'Something went wrong.'
+          'Something went wrong while updating.',
       );
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
-    <ScrollView
+    <KeyboardAvoidingView
       style={styles.container}
-      contentContainerStyle={
-        styles.content
-      }
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <Text style={styles.title}>
-        Edit Garment Part
-      </Text>
-
-      <Text style={styles.label}>
-        Part Name
-      </Text>
-
-      <TextInput
-        style={styles.input}
-        placeholder="Example: Upper"
-        value={name}
-        onChangeText={setName}
-      />
-
-      <Text style={styles.label}>
-        Gender
-      </Text>
-
-      <View
-        style={styles.genderContainer}
-      >
-        {[
-          'Male',
-          'Female',
-          'Unisex',
-        ].map((item) => (
-          <TouchableOpacity
-            key={item}
-            style={[
-              styles.genderButton,
-              gender === item &&
-                styles.selectedGender,
-            ]}
-            onPress={() =>
-              setGender(item)
-            }
-          >
-            <Text
-              style={[
-                styles.genderText,
-                gender === item &&
-                  styles.selectedGenderText,
-              ]}
-            >
-              {item}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      <Text style={styles.label}>
-        Price
-      </Text>
-
-      <TextInput
-        style={styles.input}
-        placeholder="Example: 500"
-        value={price}
-        onChangeText={setPrice}
-        keyboardType="decimal-pad"
-      />
-
-      <Text style={styles.label}>
-        Description
-      </Text>
-
-      <TextInput
-        style={[
-          styles.input,
-          styles.descriptionInput,
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[
+          styles.content,
+          isWideScreen && styles.wideContent,
         ]}
-        placeholder="Enter description"
-        value={description}
-        onChangeText={setDescription}
-        multiline
-      />
-
-      <Text style={styles.label}>
-        Availability
-      </Text>
-
-      <View
-        style={
-          styles.availabilityContainer
-        }
       >
-        <TouchableOpacity
-          style={[
-            styles.availabilityButton,
-            available &&
-              styles.selectedAvailable,
-          ]}
-          onPress={() =>
-            setAvailable(true)
-          }
-        >
-          <Text
-            style={[
-              styles.availabilityText,
-              available &&
-                styles.selectedAvailabilityText,
-            ]}
-          >
-            Available
+        {/* HEADER */}
+        <View style={styles.heading}>
+          <Text style={styles.eyebrow}>
+            GARMENT MANAGEMENT
           </Text>
-        </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[
-            styles.availabilityButton,
-            !available &&
-              styles.selectedUnavailable,
-          ]}
-          onPress={() =>
-            setAvailable(false)
-          }
-        >
-          <Text
-            style={[
-              styles.availabilityText,
-              !available &&
-                styles.selectedUnavailableText,
-            ]}
-          >
-            Not Available
+          <Text style={styles.title}>
+            Edit Garment Part
           </Text>
-        </TouchableOpacity>
-      </View>
 
-      <TouchableOpacity
-        style={styles.updateButton}
-        onPress={updatePart}
-      >
-        <Text
-          style={styles.updateButtonText}
-        >
-          Update Garment Part
-        </Text>
-      </TouchableOpacity>
-    </ScrollView>
+          <Text style={styles.subtitle}>
+            Update the information, pricing, and availability of this garment part.
+          </Text>
+        </View>
+
+        {/* FORM */}
+        <View style={styles.formCard}>
+          {/* PART NAME */}
+          <View style={styles.fieldGroup}>
+            <Text style={styles.label}>
+              Part Name <Text style={styles.required}>*</Text>
+            </Text>
+
+            <TextInput
+              style={styles.input}
+              placeholder="Example: Upper, Pants, Sleeves"
+              placeholderTextColor="#aaa"
+              value={name}
+              onChangeText={setName}
+              maxLength={100}
+              editable={!saving}
+            />
+
+            <Text style={styles.helperText}>
+              Enter the name of this garment part.
+            </Text>
+          </View>
+
+          {/* GENDER */}
+          <View style={styles.fieldGroup}>
+            <Text style={styles.label}>Gender</Text>
+
+            <View style={styles.optionContainer}>
+              {['Male', 'Female', 'Unisex'].map((item) => {
+                const selected = gender === item;
+
+                return (
+                  <TouchableOpacity
+                    key={item}
+                    style={[
+                      styles.optionButton,
+                      selected && styles.selectedGender,
+                    ]}
+                    onPress={() => setGender(item)}
+                    disabled={saving}
+                    activeOpacity={0.75}
+                  >
+                    <Text
+                      style={[
+                        styles.optionText,
+                        selected && styles.selectedGenderText,
+                      ]}
+                    >
+                      {item}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* PRICE */}
+          <View style={styles.fieldGroup}>
+            <Text style={styles.label}>
+              Price <Text style={styles.required}>*</Text>
+            </Text>
+
+            <View style={styles.priceContainer}>
+              <View style={styles.currencyContainer}>
+                <Text style={styles.currencyText}>₱</Text>
+              </View>
+
+              <TextInput
+                style={styles.priceInput}
+                placeholder="0.00"
+                placeholderTextColor="#aaa"
+                value={price}
+                onChangeText={(value) => {
+                  const cleaned = value.replace(/[^0-9.]/g, '');
+                  const decimalParts = cleaned.split('.');
+
+                  if (decimalParts.length > 2) return;
+
+                  if (
+                    decimalParts[1] &&
+                    decimalParts[1].length > 2
+                  ) {
+                    return;
+                  }
+
+                  setPrice(cleaned);
+                }}
+                keyboardType="decimal-pad"
+                editable={!saving}
+              />
+            </View>
+
+            <Text style={styles.helperText}>
+              Update the base price for this garment part.
+            </Text>
+          </View>
+
+          {/* DESCRIPTION */}
+          <View style={styles.fieldGroup}>
+            <View style={styles.labelRow}>
+              <Text style={styles.label}>Description</Text>
+
+              <Text style={styles.counter}>
+                {description.length}/1000
+              </Text>
+            </View>
+
+            <TextInput
+              style={[styles.input, styles.descriptionInput]}
+              placeholder="Enter description..."
+              placeholderTextColor="#aaa"
+              value={description}
+              onChangeText={setDescription}
+              multiline
+              textAlignVertical="top"
+              maxLength={1000}
+              editable={!saving}
+            />
+
+            <Text style={styles.helperText}>
+              Optional. Provide additional information about this part.
+            </Text>
+          </View>
+
+          {/* AVAILABILITY */}
+          <View style={styles.fieldGroup}>
+            <Text style={styles.label}>Availability</Text>
+
+            <View style={styles.availabilityContainer}>
+              <TouchableOpacity
+                style={[
+                  styles.availabilityButton,
+                  available && styles.selectedAvailable,
+                ]}
+                onPress={() => setAvailable(true)}
+                disabled={saving}
+                activeOpacity={0.75}
+              >
+                <Text
+                  style={[
+                    styles.availabilityText,
+                    available && styles.selectedAvailabilityText,
+                  ]}
+                >
+                  Available
+                </Text>
+
+                <Text
+                  style={[
+                    styles.availabilityDescription,
+                    available && styles.selectedAvailabilityText,
+                  ]}
+                >
+                  Can be ordered
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.availabilityButton,
+                  !available && styles.selectedUnavailable,
+                ]}
+                onPress={() => setAvailable(false)}
+                disabled={saving}
+                activeOpacity={0.75}
+              >
+                <Text
+                  style={[
+                    styles.availabilityText,
+                    !available && styles.selectedUnavailableText,
+                  ]}
+                >
+                  Not Available
+                </Text>
+
+                <Text
+                  style={[
+                    styles.availabilityDescription,
+                    !available && styles.selectedUnavailableText,
+                  ]}
+                >
+                  Cannot be ordered
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* UPDATE BUTTON */}
+          <TouchableOpacity
+            style={[
+              styles.updateButton,
+              saving && styles.disabledButton,
+            ]}
+            onPress={updatePart}
+            disabled={saving}
+            activeOpacity={0.8}
+          >
+            {saving ? (
+              <>
+                <ActivityIndicator color="#fff" />
+                <Text style={styles.updateButtonText}>
+                  Updating...
+                </Text>
+              </>
+            ) : (
+              <Text style={styles.updateButtonText}>
+                Save Changes
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          <Text style={styles.footerNote}>
+            Fields marked with * are required.
+          </Text>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: '#fff8fa',
   },
 
   content: {
-    padding: 20,
+    padding: 16,
     paddingBottom: 40,
   },
 
+  wideContent: {
+    width: '100%',
+    maxWidth: 750,
+    alignSelf: 'center',
+    paddingHorizontal: 24,
+    paddingTop: 25,
+  },
+
+  heading: {
+    marginBottom: 20,
+  },
+
+  eyebrow: {
+    color: '#b86b83',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 1.3,
+    marginBottom: 6,
+  },
+
   title: {
-    fontSize: 26,
-    fontWeight: '700',
-    color: '#333',
+    color: '#30242a',
+    fontSize: 25,
+    fontWeight: '800',
+  },
+
+  subtitle: {
+    color: '#888',
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 6,
+  },
+
+  formCard: {
+    backgroundColor: '#fff',
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: '#f1dce3',
+    padding: 16,
+  },
+
+  fieldGroup: {
     marginBottom: 20,
   },
 
   label: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#444',
-    marginTop: 15,
-    marginBottom: 8,
+    color: '#44343b',
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 9,
+  },
+
+  required: {
+    color: '#d9534f',
   },
 
   input: {
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 15,
+    borderColor: '#eadde2',
     backgroundColor: '#fff',
+    borderRadius: 10,
+    paddingHorizontal: 13,
+    paddingVertical: 13,
+    fontSize: 14,
+    color: '#30242a',
   },
 
-  descriptionInput: {
-    height: 100,
-    textAlignVertical: 'top',
+  helperText: {
+    color: '#999',
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 6,
   },
 
-  genderContainer: {
+  optionContainer: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
   },
 
-  genderButton: {
+  optionButton: {
     flex: 1,
+    minWidth: 75,
     borderWidth: 1,
-    borderColor: '#ddd',
-    padding: 12,
-    borderRadius: 8,
+    borderColor: '#eadde2',
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    paddingVertical: 12,
     alignItems: 'center',
   },
 
   selectedGender: {
-    backgroundColor: '#d96b8a',
+    backgroundColor: '#fff0f5',
     borderColor: '#d96b8a',
   },
 
-  genderText: {
-    color: '#555',
+  optionText: {
+    color: '#666',
+    fontSize: 12,
+    fontWeight: '600',
   },
 
   selectedGenderText: {
-    color: '#fff',
-    fontWeight: '600',
+    color: '#d96b8a',
+    fontWeight: '800',
+  },
+
+  priceContainer: {
+    flexDirection: 'row',
+    borderWidth: 1,
+    borderColor: '#eadde2',
+    borderRadius: 10,
+    overflow: 'hidden',
+    alignItems: 'center',
+  },
+
+  currencyContainer: {
+    backgroundColor: '#fff0f5',
+    paddingHorizontal: 15,
+    paddingVertical: 13,
+    borderRightWidth: 1,
+    borderRightColor: '#eadde2',
+  },
+
+  currencyText: {
+    color: '#d96b8a',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+
+  priceInput: {
+    flex: 1,
+    paddingHorizontal: 13,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: '#30242a',
+  },
+
+  labelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+
+  counter: {
+    color: '#aaa',
+    fontSize: 10,
+    marginBottom: 9,
+  },
+
+  descriptionInput: {
+    height: 110,
+    paddingTop: 12,
   },
 
   availabilityContainer: {
     flexDirection: 'row',
-    gap: 8,
+    flexWrap: 'wrap',
+    gap: 9,
   },
 
   availabilityButton: {
     flex: 1,
+    minWidth: 125,
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: '#eadde2',
+    backgroundColor: '#fff',
+    borderRadius: 10,
     padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
   },
 
   selectedAvailable: {
-    backgroundColor: '#28a745',
-    borderColor: '#28a745',
+    backgroundColor: '#eaf7ef',
+    borderColor: '#4caf50',
   },
 
   selectedUnavailable: {
-    backgroundColor: '#d9534f',
+    backgroundColor: '#fff0ef',
     borderColor: '#d9534f',
   },
 
   availabilityText: {
     color: '#555',
-    fontWeight: '600',
+    fontSize: 12,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+
+  availabilityDescription: {
+    color: '#999',
+    fontSize: 10,
+    textAlign: 'center',
+    marginTop: 5,
   },
 
   selectedAvailabilityText: {
-    color: '#fff',
+    color: '#24834c',
   },
 
   selectedUnavailableText: {
-    color: '#fff',
+    color: '#d9534f',
   },
 
   updateButton: {
     backgroundColor: '#d96b8a',
-    padding: 15,
-    borderRadius: 10,
+    paddingVertical: 15,
+    paddingHorizontal: 16,
+    borderRadius: 11,
     alignItems: 'center',
-    marginTop: 25,
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 9,
+    marginTop: 3,
   },
 
   updateButtonText: {
     color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+
+  disabledButton: {
+    opacity: 0.65,
+  },
+
+  footerNote: {
+    color: '#aaa',
+    fontSize: 10,
+    textAlign: 'center',
+    marginTop: 13,
   },
 });

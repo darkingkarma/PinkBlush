@@ -1,17 +1,18 @@
-
 import { useEffect, useState } from 'react';
 
 import {
   ActivityIndicator,
   Alert,
   Image,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
-  Platform,
   TextInput,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
 
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -38,6 +39,13 @@ export default function ReviewRequestScreen({
   navigation,
 }: Props) {
   const { order } = route.params;
+  const { width } = useWindowDimensions();
+
+  const isLargeScreen = width >= 700;
+  const imageHeight = Math.min(
+    Math.max(width * 0.42, 190),
+    320
+  );
 
   const [customer, setCustomer] =
     useState<CustomerProfile | null>(null);
@@ -85,23 +93,8 @@ export default function ReviewRequestScreen({
     'quotation_sent',
   ];
 
-  const lockedStatuses = [
-    'accepted',
-    'declined',
-    'completed',
-    'cancelled',
-    'deposit_paid',
-    'in_production',
-    'for_fitting',
-    'for_revision',
-    'ready_for_pickup',
-  ];
-
   const canManageQuotation =
     editableStatuses.includes(reviewStatus);
-
-  const isLocked =
-    lockedStatuses.includes(reviewStatus);
 
   const isBusy =
     saving || declining || reviewUpdating;
@@ -132,23 +125,19 @@ export default function ReviewRequestScreen({
     return `${year}-${month}-${day}`;
   };
 
-  // DateTimePicker v9.1.0 API
-  // Kept unchanged from your original implementation.
-  const handleDateValueChange = (
-    event: any,
-    selectedDate?: Date
-  ) => {
-    if (selectedDate) {
+  const todayDate = toDatabaseDate(new Date());
+
+  // Use the standard React Native DateTimePicker onChange callback.
+  const handleDateChange = (event: any, selectedDate?: Date) => {
+    if (event?.type === 'set' && selectedDate) {
       setEstimatedCompletionDate(selectedDate);
     }
 
+    // Android uses a native dialog that closes after selection
+    // or dismissal. iOS keeps the picker visible until Done is pressed.
     if (Platform.OS === 'android') {
       setShowDatePicker(false);
     }
-  };
-
-  const handleDateDismiss = () => {
-    setShowDatePicker(false);
   };
 
   // Automatically mark newly opened requests as under review.
@@ -287,7 +276,6 @@ export default function ReviewRequestScreen({
     };
   }, [order.user_id, order.reference_image_url]);
 
-  // Check if the estimated date is later than the customer's needed-by date.
   const neededByDate = order.needed_by_date
     ? new Date(`${order.needed_by_date}T12:00:00`)
     : null;
@@ -296,7 +284,7 @@ export default function ReviewRequestScreen({
     !!estimatedCompletionDate &&
     !!order.needed_by_date &&
     toDatabaseDate(estimatedCompletionDate) >
-        order.needed_by_date;
+      order.needed_by_date;
 
   const sendQuotation = async () => {
     if (!canManageQuotation || isBusy) return;
@@ -305,6 +293,15 @@ export default function ReviewRequestScreen({
       Alert.alert(
         'Completion Date Required',
         'Please select an estimated completion date before sending the quotation.'
+      );
+      return;
+    }
+
+    // Validate that the estimated completion date is not in the past.
+    if (toDatabaseDate(estimatedCompletionDate) < todayDate) {
+      Alert.alert(
+        'Invalid Completion Date',
+        'The estimated completion date cannot be earlier than today.'
       );
       return;
     }
@@ -473,460 +470,500 @@ export default function ReviewRequestScreen({
 
   return (
     <View style={styles.container}>
-      <ScrollView
-        contentContainerStyle={styles.content}
-        keyboardShouldPersistTaps="handled"
+      <KeyboardAvoidingView
+        style={styles.keyboardContainer}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        {/* Request heading */}
-        <View style={styles.introCard}>
-          <Text style={styles.heading}>
-            Custom Order Request
-          </Text>
-
-          <Text style={styles.subtitle}>
-            Review the customer's requirements before preparing a quotation.
-          </Text>
-
-          <View style={styles.statusBadge}>
-            <Text style={styles.statusText}>
-              {formatStatus(reviewStatus)}
-            </Text>
-          </View>
-
-          {reviewUpdating && (
-            <View style={styles.reviewUpdating}>
-              <ActivityIndicator size="small" color="#d96b8a" />
-              <Text style={styles.mutedText}>
-                Updating request status...
-              </Text>
-            </View>
-          )}
-        </View>
-
-        {/* Customer information */}
-        <Text style={styles.sectionTitle}>
-          Customer Information
-        </Text>
-
-        <View style={styles.card}>
-          <DetailRow
-            icon="person-outline"
-            label="Name"
-            value={customerName}
-          />
-
-          <DetailRow
-            icon="mail-outline"
-            label="Email"
-            value={customer?.email || 'Email not available'}
-          />
-
-          <DetailRow
-            icon="call-outline"
-            label="Contact Number"
-            value={
-              customer?.contact_number ||
-              'Contact number not provided'
-            }
-          />
-
-          <DetailRow
-            icon="calendar-outline"
-            label="Date Submitted"
-            value={new Date(
-              order.created_at
-            ).toLocaleDateString('en-PH')}
-          />
-        </View>
-
-        {/* Garment requirements */}
-        <Text style={styles.sectionTitle}>
-          Garment Requirements
-        </Text>
-
-        <View style={styles.card}>
-          <Text style={styles.fieldLabel}>
-            Garment Description
-          </Text>
-          <Text style={styles.description}>
-            {order.garment_description || 'No description provided.'}
-          </Text>
-
-          <Text style={styles.fieldLabel}>
-            Preferred Color
-          </Text>
-          <Text style={styles.description}>
-            {order.preferred_color ||
-              'No preferred color specified.'}
-          </Text>
-
-          <Text style={styles.fieldLabel}>
-            Fabric Preference
-          </Text>
-          <Text style={styles.description}>
-            {order.fabric_preference ||
-              'No fabric preference specified.'}
-          </Text>
-
-          <Text style={styles.fieldLabel}>
-            Customer's Needed-by Date
-          </Text>
-          <Text style={styles.description}>
-            {neededByDate
-              ? formatDate(neededByDate)
-              : 'No preferred date specified.'}
-          </Text>
-
-          <Text style={styles.fieldLabel}>
-            Special Instructions
-          </Text>
-          <Text style={styles.description}>
-            {order.special_instructions ||
-              'No special instructions provided.'}
-          </Text>
-        </View>
-
-        {/* Reference image */}
-        <Text style={styles.sectionTitle}>
-          Reference Image
-        </Text>
-
-        <View style={styles.card}>
-          {imageLoading ? (
-            <View style={styles.imagePlaceholder}>
-              <ActivityIndicator
-                color="#d96b8a"
-                size="large"
-              />
-              <Text style={styles.mutedText}>
-                Loading reference image...
-              </Text>
-            </View>
-          ) : imageUrl ? (
-            <Image
-              source={{ uri: imageUrl }}
-              style={styles.referenceImage}
-              resizeMode="contain"
-              onError={() => {
-                setImageUrl(null);
-                setImageError(
-                  'The image could not be displayed.'
-                );
-              }}
-            />
-          ) : (
-            <View style={styles.imagePlaceholder}>
-              <Ionicons
-                name="image-outline"
-                size={35}
-                color="#c5a3ae"
-              />
-              <Text style={styles.mutedText}>
-                {imageError ||
-                  'No reference image available.'}
-              </Text>
-            </View>
-          )}
-        </View>
-
-        {/* Quotation */}
-        <Text style={styles.sectionTitle}>
-          Quotation Details
-        </Text>
-
-        <View style={styles.card}>
-          {order.quoted_price != null && (
-            <View style={styles.existingQuote}>
-              <Text style={styles.existingQuoteLabel}>
-                Previous Quotation
+        <ScrollView
+          contentContainerStyle={[
+            styles.content,
+            {
+              paddingHorizontal: isLargeScreen ? 24 : 16,
+            },
+          ]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View
+            style={[
+              styles.contentInner,
+              {
+                maxWidth: isLargeScreen ? 850 : 620,
+              },
+            ]}
+          >
+            {/* Request heading */}
+            <View style={styles.introCard}>
+              <Text style={styles.heading}>
+                Custom Order Request
               </Text>
 
-              <Text style={styles.existingQuoteAmount}>
-                {formatMoney(Number(order.quoted_price))}
+              <Text style={styles.subtitle}>
+                Review the customer's requirements before preparing a quotation.
               </Text>
 
-              {order.deposit_amount != null && (
-                <Text style={styles.mutedText}>
-                  Required deposit:{' '}
-                  {formatMoney(Number(order.deposit_amount))}
+              <View style={styles.statusBadge}>
+                <Text style={styles.statusText}>
+                  {formatStatus(reviewStatus)}
                 </Text>
-              )}
+              </View>
 
-              {order.estimated_completion_date && (
-                <Text style={styles.mutedText}>
-                  Estimated completion:{' '}
-                  {formatDate(
-                    new Date(
-                      `${order.estimated_completion_date}T12:00:00`
-                    )
-                  )}
-                </Text>
-              )}
-            </View>
-          )}
-
-          {canManageQuotation ? (
-            <>
-              <Text style={styles.fieldLabel}>
-                Estimated Completion Date *
-              </Text>
-
-              <TouchableOpacity
-                style={styles.dateButton}
-                onPress={() => setShowDatePicker(true)}
-                disabled={isBusy}
-                activeOpacity={0.7}
-              >
-                <Ionicons
-                  name="calendar-outline"
-                  size={20}
-                  color="#d96b8a"
-                />
-
-                <Text
-                  style={[
-                    styles.dateButtonText,
-                    !estimatedCompletionDate &&
-                      styles.placeholderText,
-                  ]}
-                >
-                  {estimatedCompletionDate
-                    ? formatDate(estimatedCompletionDate)
-                    : 'Select estimated completion date'}
-                </Text>
-
-                <Ionicons
-                  name="chevron-down"
-                  size={18}
-                  color="#98727f"
-                />
-              </TouchableOpacity>
-
-              {showDatePicker && (
-                <View style={styles.datePickerContainer}>
-                  <DateTimePicker
-                    value={estimatedCompletionDate ?? new Date()}
-                    mode="date"
-                    minimumDate={new Date()}
-                    display="default"
-                    onValueChange={handleDateValueChange}
-                    onDismiss={handleDateDismiss}
+              {reviewUpdating && (
+                <View style={styles.reviewUpdating}>
+                  <ActivityIndicator
+                    size="small"
+                    color="#d96b8a"
                   />
-
-                  <TouchableOpacity
-                    style={styles.doneDateButton}
-                    onPress={() => setShowDatePicker(false)}
-                  >
-                    <Text style={styles.doneDateText}>
-                      Done
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-
-              <Text style={styles.dateHelper}>
-                This is the date staff expects the garment to be finished. It may differ from the customer's needed-by date.
-              </Text>
-
-              {dateIsLate && (
-                <View style={styles.warningBox}>
-                  <Ionicons
-                    name="warning-outline"
-                    size={18}
-                    color="#a66b20"
-                  />
-                  <Text style={styles.warningText}>
-                    Your estimated completion date is later than the customer's needed-by date. Please confirm that the customer can accept this schedule.
+                  <Text style={styles.mutedText}>
+                    Updating request status...
                   </Text>
                 </View>
               )}
+            </View>
 
-              <Text style={styles.fieldLabel}>
-                Total Price (₱) *
-              </Text>
+            {/* Customer information */}
+            <Text style={styles.sectionTitle}>
+              Customer Information
+            </Text>
 
-              <TextInput
-                style={styles.input}
-                value={quotedPrice}
-                onChangeText={setQuotedPrice}
-                placeholder="e.g. 1500"
-                placeholderTextColor="#999"
-                keyboardType="decimal-pad"
-                editable={!isBusy}
+            <View style={styles.card}>
+              <DetailRow
+                icon="person-outline"
+                label="Name"
+                value={customerName}
               />
 
-              <Text style={styles.fieldLabel}>
-                Required Online Deposit (₱) *
-              </Text>
-
-              <TextInput
-                style={styles.input}
-                value={depositAmount}
-                onChangeText={setDepositAmount}
-                placeholder="e.g. 500"
-                placeholderTextColor="#999"
-                keyboardType="decimal-pad"
-                editable={!isBusy}
+              <DetailRow
+                icon="mail-outline"
+                label="Email"
+                value={customer?.email || 'Email not available'}
               />
 
-              {quotedPrice.trim() !== '' &&
-                depositAmount.trim() !== '' &&
-                Number.isFinite(Number(quotedPrice)) &&
-                Number.isFinite(Number(depositAmount)) &&
-                Number(quotedPrice) >= Number(depositAmount) &&
-                Number(quotedPrice) > 0 &&
-                Number(depositAmount) > 0 && (
-                  <View style={styles.balanceBox}>
-                    <Text style={styles.balanceLabel}>
-                      Remaining Balance (Cash at Pickup)
+              <DetailRow
+                icon="call-outline"
+                label="Contact Number"
+                value={
+                  customer?.contact_number ||
+                  'Contact number not provided'
+                }
+              />
+
+              <DetailRow
+                icon="calendar-outline"
+                label="Date Submitted"
+                value={new Date(
+                  order.created_at
+                ).toLocaleDateString('en-PH')}
+              />
+            </View>
+
+            {/* Garment requirements */}
+            <Text style={styles.sectionTitle}>
+              Garment Requirements
+            </Text>
+
+            <View style={styles.card}>
+              <Text style={styles.fieldLabel}>
+                Garment Description
+              </Text>
+              <Text style={styles.description}>
+                {order.garment_description ||
+                  'No description provided.'}
+              </Text>
+
+              <Text style={styles.fieldLabel}>
+                Preferred Color
+              </Text>
+              <Text style={styles.description}>
+                {order.preferred_color ||
+                  'No preferred color specified.'}
+              </Text>
+
+              <Text style={styles.fieldLabel}>
+                Fabric Preference
+              </Text>
+              <Text style={styles.description}>
+                {order.fabric_preference ||
+                  'No fabric preference specified.'}
+              </Text>
+
+              <Text style={styles.fieldLabel}>
+                Customer's Needed-by Date
+              </Text>
+              <Text style={styles.description}>
+                {neededByDate
+                  ? formatDate(neededByDate)
+                  : 'No preferred date specified.'}
+              </Text>
+
+              <Text style={styles.fieldLabel}>
+                Special Instructions
+              </Text>
+              <Text style={styles.description}>
+                {order.special_instructions ||
+                  'No special instructions provided.'}
+              </Text>
+            </View>
+
+            {/* Reference image */}
+            <Text style={styles.sectionTitle}>
+              Reference Image
+            </Text>
+
+            <View style={styles.card}>
+              {imageLoading ? (
+                <View style={styles.imagePlaceholder}>
+                  <ActivityIndicator
+                    color="#d96b8a"
+                    size="large"
+                  />
+                  <Text style={styles.mutedText}>
+                    Loading reference image...
+                  </Text>
+                </View>
+              ) : imageUrl ? (
+                <Image
+                  source={{ uri: imageUrl }}
+                  style={[
+                    styles.referenceImage,
+                    { height: imageHeight },
+                  ]}
+                  resizeMode="contain"
+                  onError={() => {
+                    setImageUrl(null);
+                    setImageError(
+                      'The image could not be displayed.'
+                    );
+                  }}
+                />
+              ) : (
+                <View style={styles.imagePlaceholder}>
+                  <Ionicons
+                    name="image-outline"
+                    size={35}
+                    color="#c5a3ae"
+                  />
+                  <Text style={styles.mutedText}>
+                    {imageError ||
+                      'No reference image available.'}
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {/* Quotation */}
+            <Text style={styles.sectionTitle}>
+              Quotation Details
+            </Text>
+
+            <View style={styles.card}>
+              {order.quoted_price != null && (
+                <View style={styles.existingQuote}>
+                  <Text style={styles.existingQuoteLabel}>
+                    Previous Quotation
+                  </Text>
+
+                  <Text style={styles.existingQuoteAmount}>
+                    {formatMoney(Number(order.quoted_price))}
+                  </Text>
+
+                  {order.deposit_amount != null && (
+                    <Text style={styles.mutedText}>
+                      Required deposit:{' '}
+                      {formatMoney(Number(order.deposit_amount))}
                     </Text>
+                  )}
 
-                    <Text style={styles.balanceAmount}>
-                      {formatMoney(
-                        Number(quotedPrice) -
-                          Number(depositAmount)
+                  {order.estimated_completion_date && (
+                    <Text style={styles.mutedText}>
+                      Estimated completion:{' '}
+                      {formatDate(
+                        new Date(
+                          `${order.estimated_completion_date}T12:00:00`
+                        )
                       )}
                     </Text>
-                  </View>
-                )}
+                  )}
+                </View>
+              )}
 
-              <Text style={styles.fieldLabel}>
-                Quotation Note (Optional)
-              </Text>
+              {canManageQuotation ? (
+                <>
+                  <Text style={styles.fieldLabel}>
+                    Estimated Completion Date *
+                  </Text>
 
-              <TextInput
-                style={[
-                  styles.input,
-                  styles.noteInput,
-                ]}
-                value={quotationNote}
-                onChangeText={setQuotationNote}
-                placeholder="Add pricing details, included alterations, or payment reminders..."
-                placeholderTextColor="#999"
-                multiline
-                textAlignVertical="top"
-                editable={!isBusy}
-              />
-
-              <TouchableOpacity
-                style={[
-                  styles.sendButton,
-                  isBusy && styles.disabledButton,
-                ]}
-                onPress={sendQuotation}
-                disabled={isBusy}
-                activeOpacity={0.8}
-              >
-                {saving ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <>
+                  <TouchableOpacity
+                    style={styles.dateButton}
+                    onPress={() => setShowDatePicker(true)}
+                    disabled={isBusy}
+                    activeOpacity={0.7}
+                  >
                     <Ionicons
-                      name="send-outline"
+                      name="calendar-outline"
+                      size={20}
+                      color="#d96b8a"
+                    />
+
+                    <Text
+                      style={[
+                        styles.dateButtonText,
+                        !estimatedCompletionDate &&
+                          styles.placeholderText,
+                      ]}
+                    >
+                      {estimatedCompletionDate
+                        ? formatDate(estimatedCompletionDate)
+                        : 'Select estimated completion date'}
+                    </Text>
+
+                    <Ionicons
+                      name="chevron-down"
                       size={18}
-                      color="#fff"
+                      color="#98727f"
                     />
-                    <Text style={styles.sendButtonText}>
-                      {reviewStatus === 'quotation_sent'
-                        ? 'Update and Resend Quotation'
-                        : 'Save and Send Quotation'}
+                  </TouchableOpacity>
+
+                  {showDatePicker && (
+                    <View style={styles.datePickerContainer}>
+                      <DateTimePicker
+                        value={
+                          estimatedCompletionDate ?? new Date()
+                        }
+                        mode="date"
+                        minimumDate={new Date()}
+                        display={
+                          Platform.OS === 'ios'
+                            ? 'spinner'
+                            : 'default'
+                        }
+                        onChange={handleDateChange}
+                      />
+
+                      {Platform.OS === 'ios' && (
+                        <TouchableOpacity
+                          style={styles.doneDateButton}
+                          onPress={() =>
+                            setShowDatePicker(false)
+                          }
+                        >
+                          <Text style={styles.doneDateText}>
+                            Done
+                          </Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  )}
+
+                  <Text style={styles.dateHelper}>
+                    This is the date staff expects the garment to be finished. It may differ from the customer's needed-by date.
+                  </Text>
+
+                  {dateIsLate && (
+                    <View style={styles.warningBox}>
+                      <Ionicons
+                        name="warning-outline"
+                        size={18}
+                        color="#a66b20"
+                      />
+                      <Text style={styles.warningText}>
+                        Your estimated completion date is later than the customer's needed-by date. Please confirm that the customer can accept this schedule.
+                      </Text>
+                    </View>
+                  )}
+
+                  <Text style={styles.fieldLabel}>
+                    Total Price (₱) *
+                  </Text>
+
+                  <TextInput
+                    style={styles.input}
+                    value={quotedPrice}
+                    onChangeText={setQuotedPrice}
+                    placeholder="e.g. 1500"
+                    placeholderTextColor="#999"
+                    keyboardType="decimal-pad"
+                    editable={!isBusy}
+                    maxLength={12}
+                  />
+
+                  <Text style={styles.fieldLabel}>
+                    Required Online Deposit (₱) *
+                  </Text>
+
+                  <TextInput
+                    style={styles.input}
+                    value={depositAmount}
+                    onChangeText={setDepositAmount}
+                    placeholder="e.g. 500"
+                    placeholderTextColor="#999"
+                    keyboardType="decimal-pad"
+                    editable={!isBusy}
+                    maxLength={12}
+                  />
+
+                  {quotedPrice.trim() !== '' &&
+                    depositAmount.trim() !== '' &&
+                    Number.isFinite(Number(quotedPrice)) &&
+                    Number.isFinite(Number(depositAmount)) &&
+                    Number(quotedPrice) >=
+                      Number(depositAmount) &&
+                    Number(quotedPrice) > 0 &&
+                    Number(depositAmount) > 0 && (
+                      <View style={styles.balanceBox}>
+                        <Text style={styles.balanceLabel}>
+                          Remaining Balance (Cash at Pickup)
+                        </Text>
+
+                        <Text style={styles.balanceAmount}>
+                          {formatMoney(
+                            Number(quotedPrice) -
+                              Number(depositAmount)
+                          )}
+                        </Text>
+                      </View>
+                    )}
+
+                  <Text style={styles.fieldLabel}>
+                    Quotation Note (Optional)
+                  </Text>
+
+                  <TextInput
+                    style={[
+                      styles.input,
+                      styles.noteInput,
+                    ]}
+                    value={quotationNote}
+                    onChangeText={setQuotationNote}
+                    placeholder="Add pricing details, included alterations, or payment reminders..."
+                    placeholderTextColor="#999"
+                    multiline
+                    textAlignVertical="top"
+                    editable={!isBusy}
+                    maxLength={1500}
+                  />
+
+                  <TouchableOpacity
+                    style={[
+                      styles.sendButton,
+                      isBusy && styles.disabledButton,
+                    ]}
+                    onPress={sendQuotation}
+                    disabled={isBusy}
+                    activeOpacity={0.8}
+                  >
+                    {saving ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <>
+                        <Ionicons
+                          name="send-outline"
+                          size={18}
+                          color="#fff"
+                        />
+                        <Text style={styles.sendButtonText}>
+                          {reviewStatus === 'quotation_sent'
+                            ? 'Update and Resend Quotation'
+                            : 'Save and Send Quotation'}
+                        </Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+
+                  <Text style={styles.helperText}>
+                    Sending a quotation does not process a payment. The customer must accept the quotation before paying the online deposit.
+                  </Text>
+
+                  <View style={styles.declineDivider} />
+
+                  <Text style={styles.declineHeading}>
+                    Decline This Request
+                  </Text>
+
+                  <Text style={styles.declineDescription}>
+                    If the shop cannot accommodate this order, provide a reason. The customer will be able to see it in their order details.
+                  </Text>
+
+                  <Text style={styles.fieldLabel}>
+                    Reason for Declining *
+                  </Text>
+
+                  <TextInput
+                    style={[
+                      styles.input,
+                      styles.noteInput,
+                      styles.declineInput,
+                    ]}
+                    value={declineReason}
+                    onChangeText={setDeclineReason}
+                    placeholder="Explain why this request cannot be accommodated..."
+                    placeholderTextColor="#999"
+                    multiline
+                    textAlignVertical="top"
+                    editable={!isBusy}
+                    maxLength={1000}
+                  />
+
+                  <TouchableOpacity
+                    style={[
+                      styles.declineButton,
+                      isBusy && styles.disabledButton,
+                    ]}
+                    onPress={declineRequest}
+                    disabled={isBusy}
+                    activeOpacity={0.8}
+                  >
+                    {declining ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <>
+                        <Ionicons
+                          name="close-circle-outline"
+                          size={19}
+                          color="#fff"
+                        />
+                        <Text style={styles.declineButtonText}>
+                          Decline Request
+                        </Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+
+                  <Text style={styles.helperText}>
+                    Declining the request is separate from the customer declining a quotation.
+                  </Text>
+                </>
+              ) : (
+                <View style={styles.lockedNotice}>
+                  <Ionicons
+                    name="lock-closed-outline"
+                    size={19}
+                    color="#8a6470"
+                  />
+
+                  <View style={styles.lockedContent}>
+                    <Text style={styles.lockedTitle}>
+                      Quotation Editing Unavailable
                     </Text>
-                  </>
-                )}
-              </TouchableOpacity>
 
-              <Text style={styles.helperText}>
-                Sending a quotation does not process a payment. The customer must accept the quotation before paying the online deposit.
-              </Text>
-
-              <View style={styles.declineDivider} />
-
-              <Text style={styles.declineHeading}>
-                Decline This Request
-              </Text>
-
-              <Text style={styles.declineDescription}>
-                If the shop cannot accommodate this order, provide a reason. The customer will be able to see it in their order details.
-              </Text>
-
-              <Text style={styles.fieldLabel}>
-                Reason for Declining *
-              </Text>
-
-              <TextInput
-                style={[
-                  styles.input,
-                  styles.noteInput,
-                  styles.declineInput,
-                ]}
-                value={declineReason}
-                onChangeText={setDeclineReason}
-                placeholder="Explain why this request cannot be accommodated..."
-                placeholderTextColor="#999"
-                multiline
-                textAlignVertical="top"
-                editable={!isBusy}
-                maxLength={1000}
-              />
-
-              <TouchableOpacity
-                style={[
-                  styles.declineButton,
-                  isBusy && styles.disabledButton,
-                ]}
-                onPress={declineRequest}
-                disabled={isBusy}
-                activeOpacity={0.8}
-              >
-                {declining ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <>
-                    <Ionicons
-                      name="close-circle-outline"
-                      size={19}
-                      color="#fff"
-                    />
-                    <Text style={styles.declineButtonText}>
-                      Decline Request
+                    <Text style={styles.lockedText}>
+                      {reviewStatus === 'accepted'
+                        ? 'The customer has accepted the quotation. This request can now proceed to deposit and production.'
+                        : reviewStatus === 'declined'
+                        ? 'This request has been declined.'
+                        : reviewStatus === 'completed'
+                        ? 'This order has already been completed.'
+                        : reviewStatus === 'cancelled'
+                        ? 'This request has been cancelled.'
+                        : 'This order has progressed beyond the quotation stage. Quotation editing and request declining are no longer available here.'}
                     </Text>
-                  </>
-                )}
-              </TouchableOpacity>
-
-              <Text style={styles.helperText}>
-                Declining the request is separate from the customer declining a quotation.
-              </Text>
-            </>
-          ) : (
-            <View style={styles.lockedNotice}>
-              <Ionicons
-                name="lock-closed-outline"
-                size={19}
-                color="#8a6470"
-              />
-
-              <View style={styles.lockedContent}>
-                <Text style={styles.lockedTitle}>
-                  Quotation Editing Unavailable
-                </Text>
-
-                <Text style={styles.lockedText}>
-                  {reviewStatus === 'accepted'
-                    ? 'The customer has accepted the quotation. This request can now proceed to deposit and production.'
-                    : reviewStatus === 'declined'
-                    ? 'This request has been declined.'
-                    : reviewStatus === 'completed'
-                    ? 'This order has already been completed.'
-                    : reviewStatus === 'cancelled'
-                    ? 'This request has been cancelled.'
-                    : 'This order has progressed beyond the quotation stage. Quotation editing and request declining are no longer available here.'}
-                </Text>
-              </View>
+                  </View>
+                </View>
+              )}
             </View>
-          )}
-        </View>
-      </ScrollView>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 }
@@ -961,9 +998,18 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#faf9f8',
   },
+  keyboardContainer: {
+    flex: 1,
+  },
   content: {
-    padding: 16,
-    paddingBottom: 35,
+    width: '100%',
+    alignItems: 'center',
+    paddingTop: 16,
+    paddingBottom: 40,
+  },
+  contentInner: {
+    width: '100%',
+    alignSelf: 'center',
   },
   introCard: {
     backgroundColor: '#fff',
@@ -1056,7 +1102,6 @@ const styles = StyleSheet.create({
   },
   referenceImage: {
     width: '100%',
-    height: 260,
     backgroundColor: '#fff8fa',
     borderRadius: 10,
   },
@@ -1198,6 +1243,8 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: 'bold',
+    textAlign: 'center',
+    flexShrink: 1,
   },
   helperText: {
     color: '#888',

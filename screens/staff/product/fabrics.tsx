@@ -9,6 +9,7 @@ import {
   KeyboardAvoidingView,
   Modal,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -35,13 +36,23 @@ type Fabric = {
 
 const PINK = '#d96b8a';
 const DARK_PINK = '#B84470';
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+
+const ALLOWED_IMAGE_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+];
 
 export default function FabricsScreen() {
   const { width } = useWindowDimensions();
-  const isSmallScreen = width < 380;
+
+  const isSmallScreen = width < 430;
+  const isTablet = width >= 768;
 
   const [fabrics, setFabrics] = useState<Fabric[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const [modalVisible, setModalVisible] = useState(false);
@@ -60,25 +71,36 @@ export default function FabricsScreen() {
   // LOAD FABRICS
   // =====================================================
 
-  const getFabrics = useCallback(async () => {
-    setLoading(true);
-
-    const { data, error } = await supabase
-      .from('fabrics')
-      .select(
-        'id, name, description, image_url, price_addition, available'
-      )
-      .order('name', { ascending: true });
-
-    if (error) {
-      Alert.alert('Error', error.message);
-      setLoading(false);
-      return;
+  const getFabrics = useCallback(async (isRefresh = false) => {
+    if (isRefresh) {
+      setRefreshing(true);
+    } else if (fabrics.length === 0) {
+      setLoading(true);
     }
 
-    setFabrics((data ?? []) as Fabric[]);
-    setLoading(false);
-  }, []);
+    try {
+      const { data, error } = await supabase
+        .from('fabrics')
+        .select(
+          'id, name, description, image_url, price_addition, available'
+        )
+        .order('name', { ascending: true });
+
+      if (error) {
+        throw error;
+      }
+
+      setFabrics((data ?? []) as Fabric[]);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unable to load fabrics.';
+
+      Alert.alert('Error', message);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [fabrics.length]);
 
   useFocusEffect(
     useCallback(() => {
@@ -123,6 +145,7 @@ export default function FabricsScreen() {
     setImageUri(fabric.image_url);
     setImageBase64(null);
     setImageType('image/jpeg');
+
     setModalVisible(true);
   };
 
@@ -142,45 +165,87 @@ export default function FabricsScreen() {
   // =====================================================
 
   const pickImage = async () => {
-    const permission =
-      await ImagePicker.requestMediaLibraryPermissionsAsync();
+    try {
+      const permission =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
 
-    if (!permission.granted) {
-      Alert.alert(
-        'Permission required',
-        'Please allow photo library access to select a fabric image.'
-      );
-      return;
+      if (!permission.granted) {
+        Alert.alert(
+          'Permission Required',
+          'Please allow photo library access to select a fabric image.'
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+        base64: true,
+      });
+
+      if (result.canceled || !result.assets?.length) return;
+
+      const asset = result.assets[0];
+
+      const mimeType = asset.mimeType ?? 'image/jpeg';
+
+      if (!ALLOWED_IMAGE_TYPES.includes(mimeType)) {
+        Alert.alert(
+          'Invalid Image',
+          'Please select a JPG, PNG, or WEBP image.'
+        );
+        return;
+      }
+
+      if (asset.fileSize && asset.fileSize > MAX_IMAGE_SIZE) {
+        Alert.alert(
+          'Image Too Large',
+          'Please select an image that is 5 MB or smaller.'
+        );
+        return;
+      }
+
+      if (!asset.base64) {
+        Alert.alert(
+          'Image Error',
+          'The selected image could not be processed. Please choose another image.'
+        );
+        return;
+      }
+
+      setImageUri(asset.uri);
+      setImageBase64(asset.base64);
+      setImageType(mimeType);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unable to select image.';
+
+      Alert.alert('Image Error', message);
     }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-      base64: true,
-    });
-
-    if (result.canceled || !result.assets?.length) return;
-
-    const asset = result.assets[0];
-
-    setImageUri(asset.uri);
-    setImageBase64(asset.base64 ?? null);
-    setImageType(asset.mimeType ?? 'image/jpeg');
   };
 
   // =====================================================
   // UPLOAD IMAGE
   // =====================================================
 
-  const uploadImage = async (): Promise<string | null> => {
-    if (!imageBase64) return imageUri;
+  const uploadImage = async (): Promise<{
+    url: string;
+    path: string;
+  } | null> => {
+    if (!imageBase64) return null;
 
     const extension =
-      imageType.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg';
+      imageType === 'image/png'
+        ? 'png'
+        : imageType === 'image/webp'
+          ? 'webp'
+          : 'jpg';
 
-    const filePath = `fabrics/fabric-${Date.now()}.${extension}`;
+    const filePath = `fabrics/fabric-${Date.now()}-${Math.random()
+      .toString(36)
+      .substring(2, 8)}.${extension}`;
 
     const { error } = await supabase.storage
       .from('garments')
@@ -197,11 +262,14 @@ export default function FabricsScreen() {
       .from('garments')
       .getPublicUrl(filePath);
 
-    return data.publicUrl;
+    return {
+      url: data.publicUrl,
+      path: filePath,
+    };
   };
 
   // =====================================================
-  // REMOVE IMAGE FROM STORAGE
+  // GET STORAGE IMAGE PATH
   // =====================================================
 
   const getStoragePath = (imageUrl: string | null) => {
@@ -217,6 +285,10 @@ export default function FabricsScreen() {
     );
   };
 
+  // =====================================================
+  // REMOVE IMAGE FROM STORAGE
+  // =====================================================
+
   const removeStorageImage = async (imageUrl: string | null) => {
     const path = getStoragePath(imageUrl);
 
@@ -231,6 +303,18 @@ export default function FabricsScreen() {
     }
   };
 
+  const removeStoragePath = async (path: string | null) => {
+    if (!path) return;
+
+    const { error } = await supabase.storage
+      .from('garments')
+      .remove([path]);
+
+    if (error) {
+      console.log('New image cleanup error:', error.message);
+    }
+  };
+
   // =====================================================
   // SAVE FABRIC
   // =====================================================
@@ -240,7 +324,7 @@ export default function FabricsScreen() {
     const parsedPrice = Number(priceAddition);
 
     if (!trimmedName) {
-      Alert.alert('Error', 'Please enter a fabric name.');
+      Alert.alert('Missing Information', 'Please enter a fabric name.');
       return;
     }
 
@@ -250,19 +334,37 @@ export default function FabricsScreen() {
       parsedPrice < 0
     ) {
       Alert.alert(
-        'Invalid price',
+        'Invalid Price',
         'Please enter a valid price addition of zero or more.'
+      );
+      return;
+    }
+
+    if (description.trim().length > 500) {
+      Alert.alert(
+        'Description Too Long',
+        'Please keep the description within 500 characters.'
       );
       return;
     }
 
     setSaving(true);
 
+    let uploadedImagePath: string | null = null;
+
     try {
-      const imageChanged = Boolean(imageBase64);
-      const newImageUrl = imageChanged
-        ? await uploadImage()
-        : imageUri;
+      let newImageUrl = imageUri;
+
+      if (imageBase64) {
+        const uploadedImage = await uploadImage();
+
+        if (!uploadedImage) {
+          throw new Error('Unable to upload the selected image.');
+        }
+
+        newImageUrl = uploadedImage.url;
+        uploadedImagePath = uploadedImage.path;
+      }
 
       const fabricData = {
         name: trimmedName,
@@ -279,10 +381,11 @@ export default function FabricsScreen() {
           .eq('id', editingFabric.id);
 
         if (error) {
-          throw new Error(error.message);
+          throw error;
         }
 
-        if (imageChanged && editingFabric.image_url) {
+        // Delete the previous image only after the database update succeeds.
+        if (imageBase64 && editingFabric.image_url) {
           await removeStorageImage(editingFabric.image_url);
         }
 
@@ -296,7 +399,7 @@ export default function FabricsScreen() {
           .insert([fabricData]);
 
         if (error) {
-          throw new Error(error.message);
+          throw error;
         }
 
         setModalVisible(false);
@@ -307,6 +410,11 @@ export default function FabricsScreen() {
 
       await getFabrics();
     } catch (error) {
+      // Clean up the newly uploaded image if saving to the database failed.
+      if (uploadedImagePath) {
+        await removeStoragePath(uploadedImagePath);
+      }
+
       const message =
         error instanceof Error ? error.message : 'Something went wrong.';
 
@@ -322,6 +430,7 @@ export default function FabricsScreen() {
 
   const toggleAvailability = (fabric: Fabric) => {
     const newAvailability = !fabric.available;
+
     const actionText = newAvailability ? 'enable' : 'disable';
     const statusText = newAvailability ? 'available' : 'unavailable';
 
@@ -336,22 +445,34 @@ export default function FabricsScreen() {
         {
           text: newAvailability ? 'Enable' : 'Disable',
           onPress: async () => {
-            const { error } = await supabase
-              .from('fabrics')
-              .update({ available: newAvailability })
-              .eq('id', fabric.id);
+            try {
+              const { error } = await supabase
+                .from('fabrics')
+                .update({ available: newAvailability })
+                .eq('id', fabric.id);
 
-            if (error) {
-              Alert.alert('Error', error.message);
-              return;
+              if (error) throw error;
+
+              setFabrics((current) =>
+                current.map((item) =>
+                  item.id === fabric.id
+                    ? { ...item, available: newAvailability }
+                    : item
+                )
+              );
+
+              Alert.alert(
+                'Success',
+                `${fabric.name} is now ${statusText}.`
+              );
+            } catch (error) {
+              const message =
+                error instanceof Error
+                  ? error.message
+                  : 'Unable to update fabric availability.';
+
+              Alert.alert('Error', message);
             }
-
-            Alert.alert(
-              'Success',
-              `${fabric.name} is now ${statusText}.`
-            );
-
-            void getFabrics();
           },
         },
       ]
@@ -375,23 +496,34 @@ export default function FabricsScreen() {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            const { error } = await supabase
-              .from('fabrics')
-              .delete()
-              .eq('id', fabric.id);
+            try {
+              const { error } = await supabase
+                .from('fabrics')
+                .delete()
+                .eq('id', fabric.id);
 
-            if (error) {
-              Alert.alert('Error', error.message);
-              return;
+              if (error) {
+                throw error;
+              }
+
+              setFabrics((current) =>
+                current.filter((item) => item.id !== fabric.id)
+              );
+
+              await removeStorageImage(fabric.image_url);
+
+              Alert.alert('Success', 'Fabric deleted successfully.');
+            } catch (error) {
+              const message =
+                error instanceof Error
+                  ? error.message
+                  : 'Unable to delete this fabric.';
+
+              Alert.alert(
+                'Unable to Delete',
+                `${message}\n\nThis fabric may already be used in an existing order.`
+              );
             }
-
-            await removeStorageImage(fabric.image_url);
-
-            setFabrics((current) =>
-              current.filter((item) => item.id !== fabric.id)
-            );
-
-            Alert.alert('Success', 'Fabric deleted successfully.');
           },
         },
       ]
@@ -407,119 +539,94 @@ export default function FabricsScreen() {
       style={[
         styles.card,
         isSmallScreen && styles.cardSmall,
+        isTablet && styles.cardTablet,
       ]}
     >
-      {/* FABRIC IMAGE */}
-
-      {item.image_url ? (
-        <Image
-          source={{ uri: item.image_url }}
-          style={[
-            styles.fabricImage,
-            isSmallScreen && styles.fabricImageSmall,
-          ]}
-          resizeMode="cover"
-        />
-      ) : (
-        <View
-          style={[
-            styles.cardIcon,
-            isSmallScreen && styles.fabricImageSmall,
-          ]}
-        >
-          <Ionicons
-            name="layers-outline"
-            size={28}
-            color={PINK}
+      <View style={styles.fabricMain}>
+        {item.image_url ? (
+          <Image
+            source={{ uri: item.image_url }}
+            style={[
+              styles.fabricImage,
+              isSmallScreen && styles.fabricImageSmall,
+            ]}
+            resizeMode="cover"
           />
-        </View>
-      )}
-
-      {/* FABRIC INFORMATION */}
-
-      <View
-        style={[
-          styles.info,
-          isSmallScreen && styles.infoSmall,
-        ]}
-      >
-        <Text style={styles.name} numberOfLines={1}>
-          {item.name}
-        </Text>
-
-        {item.description ? (
-          <Text style={styles.description} numberOfLines={2}>
-            {item.description}
-          </Text>
         ) : (
-          <Text style={styles.noDescription}>
-            No description
-          </Text>
-        )}
-
-        <Text style={styles.price}>
-          +₱
-          {Number(item.price_addition || 0).toLocaleString('en-PH', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          })}
-        </Text>
-
-        <View style={styles.statusContainer}>
           <View
             style={[
-              styles.statusDot,
-              item.available
-                ? styles.availableDot
-                : styles.unavailableDot,
-            ]}
-          />
-
-          <Text
-            style={[
-              styles.statusText,
-              item.available
-                ? styles.availableText
-                : styles.unavailableText,
+              styles.cardIcon,
+              isSmallScreen && styles.fabricImageSmall,
             ]}
           >
-            {item.available ? 'Available' : 'Unavailable'}
+            <Ionicons name="layers-outline" size={28} color={PINK} />
+          </View>
+        )}
+
+        <View style={styles.info}>
+          <Text style={styles.name} numberOfLines={1}>
+            {item.name}
           </Text>
+
+          {item.description ? (
+            <Text style={styles.description} numberOfLines={2}>
+              {item.description}
+            </Text>
+          ) : (
+            <Text style={styles.noDescription}>No description</Text>
+          )}
+
+          <Text style={styles.price}>
+            +₱
+            {Number(item.price_addition || 0).toLocaleString('en-PH', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
+          </Text>
+
+          <View style={styles.statusContainer}>
+            <View
+              style={[
+                styles.statusDot,
+                item.available
+                  ? styles.availableDot
+                  : styles.unavailableDot,
+              ]}
+            />
+
+            <Text
+              style={[
+                styles.statusText,
+                item.available
+                  ? styles.availableText
+                  : styles.unavailableText,
+              ]}
+            >
+              {item.available ? 'Available' : 'Unavailable'}
+            </Text>
+          </View>
         </View>
       </View>
 
-      {/* ACTION BUTTONS */}
-
-      <View
-        style={[
-          styles.actions,
-          isSmallScreen && styles.actionsSmall,
-        ]}
-      >
+      <View style={styles.actions}>
         <TouchableOpacity
           style={styles.editButton}
           onPress={() => openEditModal(item)}
         >
-          <Ionicons
-            name="create-outline"
-            size={18}
-            color="#fff"
-          />
+          <Ionicons name="create-outline" size={17} color="#fff" />
           <Text style={styles.buttonText}>Edit</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={[
             styles.availabilityButton,
-            item.available
-              ? styles.disableButton
-              : styles.enableButton,
+            item.available ? styles.disableButton : styles.enableButton,
           ]}
           onPress={() => toggleAvailability(item)}
         >
           <Ionicons
             name={item.available ? 'eye-off-outline' : 'eye-outline'}
-            size={18}
+            size={17}
             color="#fff"
           />
           <Text style={styles.buttonText}>
@@ -531,11 +638,7 @@ export default function FabricsScreen() {
           style={styles.deleteButton}
           onPress={() => deleteFabric(item)}
         >
-          <Ionicons
-            name="trash-outline"
-            size={18}
-            color="#fff"
-          />
+          <Ionicons name="trash-outline" size={17} color="#fff" />
           <Text style={styles.buttonText}>Delete</Text>
         </TouchableOpacity>
       </View>
@@ -547,7 +650,13 @@ export default function FabricsScreen() {
   // =====================================================
 
   return (
-    <View style={styles.container}>
+    <View
+      style={[
+        styles.container,
+        isSmallScreen && styles.containerSmall,
+        isTablet && styles.containerTablet,
+      ]}
+    >
       {/* HEADER */}
 
       <View style={styles.header}>
@@ -559,12 +668,8 @@ export default function FabricsScreen() {
         </View>
 
         <View style={styles.countBadge}>
-          <Text style={styles.countText}>
-            {fabrics.length}
-          </Text>
-          <Text style={styles.countLabel}>
-            Fabrics
-          </Text>
+          <Text style={styles.countText}>{fabrics.length}</Text>
+          <Text style={styles.countLabel}>Fabrics</Text>
         </View>
       </View>
 
@@ -583,19 +688,21 @@ export default function FabricsScreen() {
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={PINK} />
-          <Text style={styles.loadingText}>
-            Loading fabrics...
-          </Text>
+          <Text style={styles.loadingText}>Loading fabrics...</Text>
         </View>
       ) : (
         <FlatList
           data={fabrics}
           keyExtractor={(item) => item.id}
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[
+            styles.list,
+            isTablet && styles.listTablet,
+          ]}
           renderItem={renderFabric}
-          onRefresh={getFabrics}
-          refreshing={loading}
+          onRefresh={() => getFabrics(true)}
+          refreshing={refreshing}
+          keyboardShouldPersistTaps="handled"
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <Ionicons
@@ -604,9 +711,7 @@ export default function FabricsScreen() {
                 color="#ddd"
               />
 
-              <Text style={styles.emptyTitle}>
-                No Fabrics Yet
-              </Text>
+              <Text style={styles.emptyTitle}>No Fabrics Yet</Text>
 
               <Text style={styles.emptyText}>
                 Add your first fabric to get started.
@@ -616,9 +721,7 @@ export default function FabricsScreen() {
         />
       )}
 
-      {/* =====================================================
-          ADD / EDIT MODAL
-          ===================================================== */}
+      {/* ADD / EDIT MODAL */}
 
       <Modal
         visible={modalVisible}
@@ -627,10 +730,20 @@ export default function FabricsScreen() {
         onRequestClose={closeModal}
       >
         <KeyboardAvoidingView
-          style={styles.modalOverlay}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={[
+            styles.modalOverlay,
+            isTablet && styles.modalOverlayTablet,
+          ]}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         >
-          <View style={styles.modalContainer}>
+          <View
+            style={[
+              styles.modalContainer,
+              isTablet && styles.modalContainerTablet,
+            ]}
+          >
+            {/* MODAL HEADER */}
+
             <View style={styles.modalHeader}>
               <View style={styles.modalTitleContainer}>
                 <Text style={styles.modalTitle}>
@@ -649,211 +762,216 @@ export default function FabricsScreen() {
                 onPress={closeModal}
                 disabled={saving}
               >
-                <Ionicons
-                  name="close"
-                  size={24}
-                  color="#555"
-                />
+                <Ionicons name="close" size={24} color="#555" />
               </TouchableOpacity>
             </View>
 
-            <FlatList
-              data={[{ key: 'fabric-form' }]}
-              keyExtractor={(item) => item.key}
-              keyboardShouldPersistTaps="handled"
+            {/* SCROLLABLE FORM */}
+
+            <ScrollView
               showsVerticalScrollIndicator={false}
-              renderItem={() => (
-                <View>
-                  {/* IMAGE PICKER */}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={styles.formContent}
+            >
+              {/* IMAGE PICKER */}
 
-                  <Text style={styles.label}>
-                    Fabric Image
-                  </Text>
+              <Text style={styles.label}>Fabric Image</Text>
 
-                  <TouchableOpacity
-                    style={styles.imagePicker}
-                    onPress={pickImage}
-                    disabled={saving}
-                  >
-                    {imageUri ? (
-                      <Image
-                        source={{ uri: imageUri }}
-                        style={styles.previewImage}
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <View style={styles.imagePlaceholder}>
-                        <Ionicons
-                          name="cloud-upload-outline"
-                          size={35}
-                          color={PINK}
-                        />
-                        <Text style={styles.imagePickerTitle}>
-                          Select Fabric Image
-                        </Text>
-                        <Text style={styles.imagePickerSubtitle}>
-                          Tap to choose a photo
-                        </Text>
-                      </View>
-                    )}
-                  </TouchableOpacity>
-
-                  {/* NAME */}
-
-                  <Text style={styles.label}>
-                    Fabric Name
-                  </Text>
-
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Enter fabric name"
-                    placeholderTextColor="#999"
-                    value={name}
-                    onChangeText={setName}
-                    editable={!saving}
+              <TouchableOpacity
+                style={styles.imagePicker}
+                onPress={pickImage}
+                disabled={saving}
+              >
+                {imageUri ? (
+                  <Image
+                    source={{ uri: imageUri }}
+                    style={styles.previewImage}
+                    resizeMode="cover"
                   />
+                ) : (
+                  <View style={styles.imagePlaceholder}>
+                    <Ionicons
+                      name="cloud-upload-outline"
+                      size={35}
+                      color={PINK}
+                    />
 
-                  {/* DESCRIPTION */}
-
-                  <Text style={styles.label}>
-                    Description
-                  </Text>
-
-                  <TextInput
-                    style={[
-                      styles.input,
-                      styles.descriptionInput,
-                    ]}
-                    placeholder="Enter fabric description"
-                    placeholderTextColor="#999"
-                    value={description}
-                    onChangeText={setDescription}
-                    multiline
-                    textAlignVertical="top"
-                    editable={!saving}
-                  />
-
-                  {/* PRICE */}
-
-                  <Text style={styles.label}>
-                    Price Addition (₱)
-                  </Text>
-
-                  <TextInput
-                    style={styles.input}
-                    placeholder="0.00"
-                    placeholderTextColor="#999"
-                    value={priceAddition}
-                    onChangeText={setPriceAddition}
-                    keyboardType="decimal-pad"
-                    editable={!saving}
-                  />
-
-                  {/* AVAILABILITY */}
-
-                  <Text style={styles.label}>
-                    Availability
-                  </Text>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.availabilitySelector,
-                      available
-                        ? styles.availabilitySelectorOn
-                        : styles.availabilitySelectorOff,
-                    ]}
-                    onPress={() => setAvailable(!available)}
-                    disabled={saving}
-                  >
-                    <View
-                      style={[
-                        styles.availabilityIcon,
-                        available
-                          ? styles.availabilityIconOn
-                          : styles.availabilityIconOff,
-                      ]}
-                    >
-                      <Ionicons
-                        name={available ? 'checkmark' : 'close'}
-                        size={18}
-                        color="#fff"
-                      />
-                    </View>
-
-                    <View style={styles.availabilityInfo}>
-                      <Text style={styles.availabilityTitle}>
-                        {available ? 'Available' : 'Unavailable'}
-                      </Text>
-
-                      <Text style={styles.availabilityDescription}>
-                        {available
-                          ? 'Customers can select this fabric.'
-                          : 'Customers cannot select this fabric.'}
-                      </Text>
-                    </View>
-
-                    <View
-                      style={[
-                        styles.switchTrack,
-                        available
-                          ? styles.switchTrackOn
-                          : styles.switchTrackOff,
-                      ]}
-                    >
-                      <View
-                        style={[
-                          styles.switchThumb,
-                          available
-                            ? styles.switchThumbOn
-                            : styles.switchThumbOff,
-                        ]}
-                      />
-                    </View>
-                  </TouchableOpacity>
-
-                  {/* SAVE */}
-
-                  <TouchableOpacity
-                    style={[
-                      styles.saveButton,
-                      saving && styles.disabledButton,
-                    ]}
-                    onPress={saveFabric}
-                    disabled={saving}
-                  >
-                    {saving ? (
-                      <ActivityIndicator color="#fff" />
-                    ) : (
-                      <>
-                        <Ionicons
-                          name={editingFabric ? 'checkmark' : 'add'}
-                          size={21}
-                          color="#fff"
-                        />
-
-                        <Text style={styles.saveButtonText}>
-                          {editingFabric
-                            ? 'Save Changes'
-                            : 'Add Fabric'}
-                        </Text>
-                      </>
-                    )}
-                  </TouchableOpacity>
-
-                  {/* CANCEL */}
-
-                  <TouchableOpacity
-                    style={styles.cancelButton}
-                    onPress={closeModal}
-                    disabled={saving}
-                  >
-                    <Text style={styles.cancelButtonText}>
-                      Cancel
+                    <Text style={styles.imagePickerTitle}>
+                      Select Fabric Image
                     </Text>
-                  </TouchableOpacity>
-                </View>
+
+                    <Text style={styles.imagePickerSubtitle}>
+                      JPG, PNG, or WEBP • Maximum 5 MB
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+
+              {imageUri && (
+                <TouchableOpacity
+                  style={styles.removeImageButton}
+                  onPress={() => {
+                    setImageUri(null);
+                    setImageBase64(null);
+                  }}
+                  disabled={saving}
+                >
+                  <Ionicons
+                    name="trash-outline"
+                    size={15}
+                    color="#d9534f"
+                  />
+                  <Text style={styles.removeImageText}>
+                    Remove Image
+                  </Text>
+                </TouchableOpacity>
               )}
-            />
+
+              {/* NAME */}
+
+              <Text style={styles.label}>Fabric Name</Text>
+
+              <TextInput
+                style={styles.input}
+                placeholder="Enter fabric name"
+                placeholderTextColor="#999"
+                value={name}
+                onChangeText={setName}
+                editable={!saving}
+                maxLength={100}
+              />
+
+              {/* DESCRIPTION */}
+
+              <Text style={styles.label}>Description</Text>
+
+              <TextInput
+                style={[styles.input, styles.descriptionInput]}
+                placeholder="Enter fabric description"
+                placeholderTextColor="#999"
+                value={description}
+                onChangeText={setDescription}
+                multiline
+                textAlignVertical="top"
+                editable={!saving}
+                maxLength={500}
+              />
+
+              <Text style={styles.characterCount}>
+                {description.length}/500 characters
+              </Text>
+
+              {/* PRICE */}
+
+              <Text style={styles.label}>Price Addition (₱)</Text>
+
+              <TextInput
+                style={styles.input}
+                placeholder="0.00"
+                placeholderTextColor="#999"
+                value={priceAddition}
+                onChangeText={setPriceAddition}
+                keyboardType="decimal-pad"
+                editable={!saving}
+              />
+
+              {/* AVAILABILITY */}
+
+              <Text style={styles.label}>Availability</Text>
+
+              <TouchableOpacity
+                style={[
+                  styles.availabilitySelector,
+                  available
+                    ? styles.availabilitySelectorOn
+                    : styles.availabilitySelectorOff,
+                ]}
+                onPress={() => setAvailable(!available)}
+                disabled={saving}
+              >
+                <View
+                  style={[
+                    styles.availabilityIcon,
+                    available
+                      ? styles.availabilityIconOn
+                      : styles.availabilityIconOff,
+                  ]}
+                >
+                  <Ionicons
+                    name={available ? 'checkmark' : 'close'}
+                    size={18}
+                    color="#fff"
+                  />
+                </View>
+
+                <View style={styles.availabilityInfo}>
+                  <Text style={styles.availabilityTitle}>
+                    {available ? 'Available' : 'Unavailable'}
+                  </Text>
+
+                  <Text style={styles.availabilityDescription}>
+                    {available
+                      ? 'Customers can select this fabric.'
+                      : 'Customers cannot select this fabric.'}
+                  </Text>
+                </View>
+
+                <View
+                  style={[
+                    styles.switchTrack,
+                    available
+                      ? styles.switchTrackOn
+                      : styles.switchTrackOff,
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.switchThumb,
+                      available
+                        ? styles.switchThumbOn
+                        : styles.switchThumbOff,
+                    ]}
+                  />
+                </View>
+              </TouchableOpacity>
+
+              {/* SAVE */}
+
+              <TouchableOpacity
+                style={[
+                  styles.saveButton,
+                  saving && styles.disabledButton,
+                ]}
+                onPress={saveFabric}
+                disabled={saving}
+              >
+                {saving ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons
+                      name={editingFabric ? 'checkmark' : 'add'}
+                      size={21}
+                      color="#fff"
+                    />
+
+                    <Text style={styles.saveButtonText}>
+                      {editingFabric ? 'Save Changes' : 'Add Fabric'}
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              {/* CANCEL */}
+
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={closeModal}
+                disabled={saving}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+            </ScrollView>
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -862,7 +980,7 @@ export default function FabricsScreen() {
 }
 
 // =====================================================
-// STYLES - MATCHING GARMENT CATEGORIES
+// STYLES
 // =====================================================
 
 const styles = StyleSheet.create({
@@ -871,6 +989,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF8FA',
     padding: 20,
   },
+
+  containerSmall: {
+    paddingHorizontal: 14,
+    paddingTop: 16,
+  },
+
+  containerTablet: {
+    paddingHorizontal: 28,
+    paddingTop: 24,
+  },
+
+  // HEADER
 
   header: {
     flexDirection: 'row',
@@ -917,6 +1047,8 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
 
+  // ADD BUTTON
+
   addButton: {
     backgroundColor: PINK,
     paddingVertical: 14,
@@ -934,9 +1066,17 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
+  // LIST
+
   list: {
     paddingBottom: 30,
     flexGrow: 1,
+  },
+
+  listTablet: {
+    width: '100%',
+    maxWidth: 1100,
+    alignSelf: 'center',
   },
 
   // FABRIC CARD
@@ -950,10 +1090,23 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 12,
   },
 
   cardSmall: {
-    flexWrap: 'wrap',
+    flexDirection: 'column',
+    alignItems: 'stretch',
+  },
+
+  cardTablet: {
+    padding: 18,
+  },
+
+  fabricMain: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 0,
   },
 
   cardIcon: {
@@ -975,19 +1128,14 @@ const styles = StyleSheet.create({
   },
 
   fabricImageSmall: {
-    width: 54,
-    height: 54,
+    width: 58,
+    height: 58,
   },
 
   info: {
     flex: 1,
     paddingRight: 8,
     minWidth: 0,
-  },
-
-  infoSmall: {
-    minWidth: 0,
-    flexBasis: '65%',
   },
 
   name: {
@@ -1051,22 +1199,17 @@ const styles = StyleSheet.create({
     color: '#888',
   },
 
-  // ACTIONS
+  // ACTION BUTTONS
 
   actions: {
+    flexDirection: 'column',
     gap: 7,
-  },
-
-  actionsSmall: {
-    flexDirection: 'row',
-    width: '100%',
-    marginTop: 12,
   },
 
   editButton: {
     backgroundColor: '#777',
-    minWidth: 75,
-    paddingVertical: 8,
+    minWidth: 78,
+    paddingVertical: 9,
     paddingHorizontal: 10,
     borderRadius: 8,
     alignItems: 'center',
@@ -1076,8 +1219,8 @@ const styles = StyleSheet.create({
   },
 
   availabilityButton: {
-    minWidth: 75,
-    paddingVertical: 8,
+    minWidth: 78,
+    paddingVertical: 9,
     paddingHorizontal: 10,
     borderRadius: 8,
     alignItems: 'center',
@@ -1096,8 +1239,8 @@ const styles = StyleSheet.create({
 
   deleteButton: {
     backgroundColor: '#d9534f',
-    minWidth: 75,
-    paddingVertical: 8,
+    minWidth: 78,
+    paddingVertical: 9,
     paddingHorizontal: 10,
     borderRadius: 8,
     alignItems: 'center',
@@ -1158,21 +1301,36 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
 
+  modalOverlayTablet: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+
   modalContainer: {
     backgroundColor: '#fff',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    padding: 22,
-    paddingBottom: 30,
+    paddingHorizontal: 22,
+    paddingTop: 22,
+    paddingBottom: 20,
     maxHeight: '90%',
     flexShrink: 1,
+    width: '100%',
+  },
+
+  modalContainerTablet: {
+    width: '85%',
+    maxWidth: 620,
+    borderRadius: 24,
+    maxHeight: '85%',
   },
 
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: 24,
+    marginBottom: 20,
   },
 
   modalTitleContainer: {
@@ -1201,6 +1359,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
+  formContent: {
+    paddingBottom: 15,
+  },
+
   label: {
     fontSize: 14,
     fontWeight: '700',
@@ -1223,6 +1385,14 @@ const styles = StyleSheet.create({
   descriptionInput: {
     height: 100,
     paddingTop: 13,
+    marginBottom: 4,
+  },
+
+  characterCount: {
+    fontSize: 11,
+    color: '#999',
+    textAlign: 'right',
+    marginBottom: 18,
   },
 
   // IMAGE PICKER
@@ -1235,7 +1405,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: '#FFF8FA',
     overflow: 'hidden',
-    marginBottom: 18,
+    marginBottom: 10,
   },
 
   previewImage: {
@@ -1260,6 +1430,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#999',
     marginTop: 4,
+  },
+
+  removeImageButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-end',
+    gap: 5,
+    marginBottom: 18,
+    paddingVertical: 5,
+  },
+
+  removeImageText: {
+    color: '#d9534f',
+    fontSize: 12,
+    fontWeight: '600',
   },
 
   // AVAILABILITY SELECTOR

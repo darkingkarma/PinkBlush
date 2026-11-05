@@ -1,34 +1,28 @@
-import {
-  useState,
-} from 'react';
+import { useState } from 'react';
 
 import {
+  ActivityIndicator,
   Alert,
   Image,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
+  View,
+  useWindowDimensions,
 } from 'react-native';
 
 import * as ImagePicker from 'expo-image-picker';
+import { decode } from 'base64-arraybuffer';
 
-import {
-  decode,
-} from 'base64-arraybuffer';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import {
-  NativeStackScreenProps,
-} from '@react-navigation/native-stack';
+import { supabase } from '../../../supabase';
 
-import {
-  supabase,
-} from '../../../supabase';
-
-import {
-  RootStackParamList,
-} from '../../../navigator';
+import { RootStackParamList } from '../../../navigator';
 
 type Props = NativeStackScreenProps<
   RootStackParamList,
@@ -43,52 +37,63 @@ type Design = {
   image_url: string | null;
 };
 
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+const MAX_NAME_LENGTH = 80;
+const MAX_DESCRIPTION_LENGTH = 1000;
+
 export default function EditDesignScreen({
   route,
   navigation,
 }: Props) {
-  const {
-    design,
-  } = route.params;
+  const { design } = route.params;
+  const { width } = useWindowDimensions();
 
-  const [name, setName] =
-    useState(design.name);
+  const [name, setName] = useState(design.name);
 
-  const [description, setDescription] =
-    useState(
-      design.description || ''
-    );
+  const [description, setDescription] = useState(
+    design.description || ''
+  );
 
-  const [image, setImage] =
-    useState<string | null>(
-      design.image_url
-    );
+  const [image, setImage] = useState<string | null>(
+    design.image_url
+  );
 
-  const [imageBase64, setImageBase64] =
-    useState<string | null>(null);
+  const [imageBase64, setImageBase64] = useState<string | null>(
+    null
+  );
 
-  const [imageType, setImageType] =
-    useState('image/jpeg');
+  const [imageType, setImageType] = useState('image/jpeg');
 
-  const [loading, setLoading] =
+  const [removeExistingImage, setRemoveExistingImage] =
     useState(false);
 
+  const [loading, setLoading] = useState(false);
+  const [pickingImage, setPickingImage] = useState(false);
+
+  const isSmallScreen = width < 380;
+
+  // -----------------------------
+  // PICK DESIGN IMAGE
+  // -----------------------------
   const pickImage = async () => {
-    const permission =
-      await ImagePicker
-        .requestMediaLibraryPermissionsAsync();
+    if (loading || pickingImage) return;
 
-    if (!permission.granted) {
-      Alert.alert(
-        'Permission Required',
-        'Please allow access to your photos.'
-      );
-      return;
-    }
+    try {
+      setPickingImage(true);
 
-    const result =
-      await ImagePicker
-        .launchImageLibraryAsync({
+      const permission =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+      if (!permission.granted) {
+        Alert.alert(
+          'Permission Required',
+          'Please allow access to your photos to select a design image.'
+        );
+        return;
+      }
+
+      const result =
+        await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ['images'],
           allowsEditing: true,
           aspect: [1, 1],
@@ -96,44 +101,96 @@ export default function EditDesignScreen({
           base64: true,
         });
 
-    if (!result.canceled) {
-      const selectedImage =
-        result.assets[0];
+      if (result.canceled) return;
 
-      setImage(
-        selectedImage.uri
-      );
+      const selectedImage = result.assets[0];
 
-      setImageBase64(
-        selectedImage.base64 || null
-      );
+      if (!selectedImage) return;
 
-      setImageType(
-        selectedImage.mimeType ||
-          'image/jpeg'
+      const selectedType =
+        selectedImage.mimeType || 'image/jpeg';
+
+      const allowedTypes = [
+        'image/jpeg',
+        'image/png',
+        'image/webp',
+      ];
+
+      if (!allowedTypes.includes(selectedType)) {
+        Alert.alert(
+          'Unsupported Image',
+          'Please select a JPG, PNG, or WebP image.'
+        );
+        return;
+      }
+
+      if (
+        selectedImage.fileSize &&
+        selectedImage.fileSize > MAX_IMAGE_SIZE
+      ) {
+        Alert.alert(
+          'Image Too Large',
+          'Please select an image that is 5 MB or smaller.'
+        );
+        return;
+      }
+
+      if (!selectedImage.base64) {
+        Alert.alert(
+          'Image Error',
+          'Unable to process this image. Please select another one.'
+        );
+        return;
+      }
+
+      setImage(selectedImage.uri);
+      setImageBase64(selectedImage.base64);
+      setImageType(selectedType);
+
+      // A newly selected image replaces the previous one.
+      setRemoveExistingImage(false);
+    } catch (error: any) {
+      Alert.alert(
+        'Image Error',
+        error.message || 'Unable to select the image.'
       );
+    } finally {
+      setPickingImage(false);
     }
   };
 
-  const uploadImage = async () => {
+  // -----------------------------
+  // REMOVE DESIGN IMAGE
+  // -----------------------------
+  const removeImage = () => {
+    if (loading) return;
+
+    setImage(null);
+    setImageBase64(null);
+    setImageType('image/jpeg');
+
+    // Delete the existing image from storage
+    // only after the database update succeeds.
+    setRemoveExistingImage(true);
+  };
+
+  // -----------------------------
+  // UPLOAD NEW IMAGE
+  // -----------------------------
+  const uploadImage = async (): Promise<{
+    url: string;
+    path: string;
+  }> => {
     if (!imageBase64) {
-      return null;
+      throw new Error('No image selected.');
     }
 
     let extension = 'jpg';
 
-    if (
-      imageType === 'image/png'
-    ) {
+    if (imageType === 'image/png') {
       extension = 'png';
-    } else if (
-      imageType === 'image/webp'
-    ) {
+    } else if (imageType === 'image/webp') {
       extension = 'webp';
-    } else if (
-      imageType === 'image/gif'
-    ) {
-      extension = 'gif';
     }
 
     const fileName =
@@ -141,66 +198,70 @@ export default function EditDesignScreen({
         .toString(36)
         .substring(2, 8)}.${extension}`;
 
-    const arrayBuffer =
-      decode(imageBase64);
+    const arrayBuffer = decode(imageBase64);
 
-    const {
-      error,
-    } = await supabase.storage
+    const { error } = await supabase.storage
       .from('garments')
-      .upload(
-        fileName,
-        arrayBuffer,
-        {
-          contentType: imageType,
-          upsert: false,
-        }
-      );
+      .upload(fileName, arrayBuffer, {
+        contentType: imageType,
+        upsert: false,
+      });
 
-    if (error) {
-      throw error;
-    }
+    if (error) throw error;
 
-    const {
-      data,
-    } = supabase.storage
+    const { data } = supabase.storage
       .from('garments')
-      .getPublicUrl(
-        fileName
-      );
+      .getPublicUrl(fileName);
 
-    return data.publicUrl;
+    return {
+      url: data.publicUrl,
+      path: fileName,
+    };
   };
 
+  // -----------------------------
+  // GET OLD IMAGE STORAGE PATH
+  // -----------------------------
+  const getOldImagePath = () => {
+    if (!design.image_url) return null;
+
+    const marker = '/garments/';
+    const index = design.image_url.indexOf(marker);
+
+    if (index === -1) return null;
+
+    return decodeURIComponent(
+      design.image_url.substring(index + marker.length)
+    );
+  };
+
+  // -----------------------------
+  // DELETE OLD IMAGE
+  // -----------------------------
   const deleteOldImage = async () => {
-    if (!design.image_url) {
-      return;
-    }
+    const imagePath = getOldImagePath();
 
-    const imagePath =
-      design.image_url.split(
-        '/garments/'
-      )[1];
+    if (!imagePath) return;
 
-    if (!imagePath) {
-      return;
-    }
-
-    const {
-      error,
-    } = await supabase.storage
+    const { error } = await supabase.storage
       .from('garments')
-      .remove([
-        imagePath,
-      ]);
+      .remove([imagePath]);
 
     if (error) {
-      throw error;
+      // The database is already updated, so this is
+      // a cleanup warning rather than a failed update.
+      console.warn('Old design image cleanup failed:', error.message);
     }
   };
 
+  // -----------------------------
+  // UPDATE DESIGN
+  // -----------------------------
   const updateDesign = async () => {
-    if (!name.trim()) {
+    const trimmedName = name.trim();
+    const trimmedDescription = description.trim();
+
+    if (!trimmedName) {
       Alert.alert(
         'Required',
         'Please enter a design name.'
@@ -208,40 +269,76 @@ export default function EditDesignScreen({
       return;
     }
 
+    if (trimmedName.length < 2) {
+      Alert.alert(
+        'Invalid Name',
+        'The design name must contain at least 2 characters.'
+      );
+      return;
+    }
+
+    if (trimmedName.length > MAX_NAME_LENGTH) {
+      Alert.alert(
+        'Name Too Long',
+        `The design name cannot exceed ${MAX_NAME_LENGTH} characters.`
+      );
+      return;
+    }
+
+    if (trimmedDescription.length > MAX_DESCRIPTION_LENGTH) {
+      Alert.alert(
+        'Description Too Long',
+        `The description cannot exceed ${MAX_DESCRIPTION_LENGTH} characters.`
+      );
+      return;
+    }
+
+    if (loading || pickingImage) return;
+
+    let uploadedImagePath: string | null = null;
+    let databaseUpdated = false;
+
     try {
       setLoading(true);
 
-      let imageUrl =
-        design.image_url;
+      let imageUrl: string | null = design.image_url;
 
+      // Upload new image if selected.
       if (imageBase64) {
-        imageUrl =
-          await uploadImage();
+        const uploadedImage = await uploadImage();
 
-        await deleteOldImage();
+        imageUrl = uploadedImage.url;
+        uploadedImagePath = uploadedImage.path;
       }
 
-      const {
-        error,
-      } = await supabase
+      // Remove image URL from database if requested.
+      if (removeExistingImage) {
+        imageUrl = null;
+      }
+
+      // Update database first.
+      const { error } = await supabase
         .from('designs')
         .update({
-          garment_part_id:
-            design.garment_part_id,
-          name: name.trim(),
-          description:
-            description.trim() ||
-            null,
-          image_url:
-            imageUrl,
+          name: trimmedName,
+          description: trimmedDescription || null,
+          image_url: imageUrl,
         })
-        .eq(
-          'id',
-          design.id
-        );
+        .eq('id', design.id);
 
       if (error) {
         throw error;
+      }
+
+      databaseUpdated = true;
+
+      // Only delete the old image after the database
+      // successfully points to the new image or null.
+      if (
+        (imageBase64 || removeExistingImage) &&
+        design.image_url
+      ) {
+        await deleteOldImage();
       }
 
       Alert.alert(
@@ -250,16 +347,29 @@ export default function EditDesignScreen({
         [
           {
             text: 'OK',
-            onPress: () =>
-              navigation.goBack(),
+            onPress: () => navigation.goBack(),
           },
         ]
       );
     } catch (error: any) {
+      // If the database update failed, remove the newly
+      // uploaded image to avoid leaving an unused file.
+      if (uploadedImagePath && !databaseUpdated) {
+        const { error: cleanupError } = await supabase.storage
+          .from('garments')
+          .remove([uploadedImagePath]);
+
+        if (cleanupError) {
+          console.warn(
+            'New image cleanup failed:',
+            cleanupError.message
+          );
+        }
+      }
+
       Alert.alert(
         'Error',
-        error.message ||
-          'Something went wrong.'
+        error.message || 'Something went wrong while updating the design.'
       );
     } finally {
       setLoading(false);
@@ -267,91 +377,246 @@ export default function EditDesignScreen({
   };
 
   return (
-    <ScrollView
-      contentContainerStyle={
-        styles.container
-      }
+    <KeyboardAvoidingView
+      style={styles.screen}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <Text style={styles.title}>
-        Edit Design
-      </Text>
-
-      <Text style={styles.label}>
-        Design Name
-      </Text>
-
-      <TextInput
-        style={styles.input}
-        placeholder="Enter design name"
-        value={name}
-        onChangeText={setName}
-      />
-
-      <Text style={styles.label}>
-        Description
-      </Text>
-
-      <TextInput
-        style={[
-          styles.input,
-          styles.descriptionInput,
+      <ScrollView
+        contentContainerStyle={[
+          styles.scrollContent,
+          {
+            paddingHorizontal: isSmallScreen ? 14 : 20,
+          },
         ]}
-        placeholder="Enter description"
-        value={description}
-        onChangeText={setDescription}
-        multiline
-      />
-
-      <Text style={styles.label}>
-        Design Image
-      </Text>
-
-      {image && (
-        <Image
-          source={{
-            uri: image,
-          }}
-          style={styles.image}
-        />
-      )}
-
-      <TouchableOpacity
-        style={styles.imageButton}
-        onPress={pickImage}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.imageButtonText}>
-          {image
-            ? 'Change Image'
-            : 'Choose Image'}
-        </Text>
-      </TouchableOpacity>
+        <View style={styles.formContainer}>
+          {/* HEADER */}
+          <View style={styles.header}>
+            <Text style={styles.title}>
+              Edit Design
+            </Text>
 
-      <TouchableOpacity
-        style={styles.updateButton}
-        onPress={updateDesign}
-        disabled={loading}
-      >
-        <Text style={styles.updateButtonText}>
-          {loading
-            ? 'Updating...'
-            : 'Update Design'}
-        </Text>
-      </TouchableOpacity>
-    </ScrollView>
+            <Text style={styles.subtitle}>
+              Update the design details and image.
+            </Text>
+          </View>
+
+          {/* FORM CARD */}
+          <View style={styles.card}>
+            {/* DESIGN NAME */}
+            <Text style={styles.label}>
+              Design Name <Text style={styles.required}>*</Text>
+            </Text>
+
+            <TextInput
+              style={styles.input}
+              placeholder="Enter design name"
+              placeholderTextColor="#aaa"
+              value={name}
+              onChangeText={(value) =>
+                setName(value.slice(0, MAX_NAME_LENGTH))
+              }
+              maxLength={MAX_NAME_LENGTH}
+              editable={!loading}
+            />
+
+            <Text style={styles.helperText}>
+              {name.length}/{MAX_NAME_LENGTH} characters
+            </Text>
+
+            {/* DESCRIPTION */}
+            <Text style={styles.label}>
+              Description
+            </Text>
+
+            <TextInput
+              style={[
+                styles.input,
+                styles.descriptionInput,
+              ]}
+              placeholder="Describe the design..."
+              placeholderTextColor="#aaa"
+              value={description}
+              onChangeText={(value) =>
+                setDescription(
+                  value.slice(0, MAX_DESCRIPTION_LENGTH)
+                )
+              }
+              multiline
+              textAlignVertical="top"
+              maxLength={MAX_DESCRIPTION_LENGTH}
+              editable={!loading}
+            />
+
+            <Text style={styles.helperText}>
+              {description.length}/{MAX_DESCRIPTION_LENGTH} characters
+            </Text>
+
+            {/* DESIGN IMAGE */}
+            <Text style={styles.label}>
+              Design Image
+            </Text>
+
+            <Text style={styles.imageHint}>
+              Upload a clear image of the design. JPG, PNG, or WebP, up to 5 MB.
+            </Text>
+
+            {image ? (
+              <View style={styles.imagePreviewContainer}>
+                <Image
+                  source={{ uri: image }}
+                  style={styles.image}
+                  resizeMode="cover"
+                />
+
+                <View style={styles.imageActions}>
+                  <TouchableOpacity
+                    style={styles.changeImageButton}
+                    onPress={pickImage}
+                    disabled={loading || pickingImage}
+                  >
+                    <Text style={styles.changeImageText}>
+                      Change Image
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.removeImageButton}
+                    onPress={removeImage}
+                    disabled={loading}
+                  >
+                    <Text style={styles.removeImageText}>
+                      Remove
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : (
+              <TouchableOpacity
+                style={styles.imagePlaceholder}
+                onPress={pickImage}
+                disabled={loading || pickingImage}
+                activeOpacity={0.7}
+              >
+                {pickingImage ? (
+                  <ActivityIndicator
+                    size="large"
+                    color="#d96b8a"
+                  />
+                ) : (
+                  <>
+                    <Text style={styles.imageIcon}>
+                      +
+                    </Text>
+
+                    <Text style={styles.placeholderTitle}>
+                      Choose Design Image
+                    </Text>
+
+                    <Text style={styles.placeholderSubtitle}>
+                      Tap here to upload an image
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
+
+            {/* UPDATE BUTTON */}
+            <TouchableOpacity
+              style={[
+                styles.updateButton,
+                loading && styles.disabledButton,
+              ]}
+              onPress={updateDesign}
+              disabled={loading || pickingImage}
+              activeOpacity={0.8}
+            >
+              {loading ? (
+                <View style={styles.loadingContent}>
+                  <ActivityIndicator
+                    color="#fff"
+                    size="small"
+                  />
+
+                  <Text style={styles.updateButtonText}>
+                    Updating Design...
+                  </Text>
+                </View>
+              ) : (
+                <Text style={styles.updateButtonText}>
+                  Update Design
+                </Text>
+              )}
+            </TouchableOpacity>
+
+            {/* CANCEL BUTTON */}
+            <TouchableOpacity
+              style={styles.cancelButton}
+              onPress={() => navigation.goBack()}
+              disabled={loading}
+            >
+              <Text style={styles.cancelButtonText}>
+                Cancel
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    padding: 20,
+  screen: {
+    flex: 1,
+    backgroundColor: '#fff8fa',
+  },
+
+  scrollContent: {
+    flexGrow: 1,
+    paddingTop: 24,
     paddingBottom: 40,
   },
 
+  formContainer: {
+    width: '100%',
+    maxWidth: 620,
+    alignSelf: 'center',
+  },
+
+  header: {
+    marginBottom: 20,
+  },
+
   title: {
-    fontSize: 24,
+    fontSize: 25,
     fontWeight: '700',
     color: '#333',
-    marginBottom: 25,
+  },
+
+  subtitle: {
+    fontSize: 13,
+    color: '#888',
+    marginTop: 6,
+    lineHeight: 19,
+  },
+
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: '#f3e3e9',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
   },
 
   label: {
@@ -359,55 +624,155 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#444',
     marginBottom: 8,
-    marginTop: 15,
+    marginTop: 17,
+  },
+
+  required: {
+    color: '#d96b8a',
   },
 
   input: {
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
+    borderColor: '#e5dce0',
+    borderRadius: 10,
+    paddingHorizontal: 13,
+    paddingVertical: 12,
     fontSize: 14,
+    color: '#333',
     backgroundColor: '#fff',
   },
 
   descriptionInput: {
-    height: 100,
-    textAlignVertical: 'top',
+    height: 115,
+    paddingTop: 12,
+  },
+
+  helperText: {
+    fontSize: 11,
+    color: '#999',
+    textAlign: 'right',
+    marginTop: 5,
+  },
+
+  imageHint: {
+    fontSize: 12,
+    color: '#888',
+    lineHeight: 18,
+    marginBottom: 10,
+  },
+
+  imagePlaceholder: {
+    height: 210,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: '#e5a5b8',
+    borderRadius: 12,
+    backgroundColor: '#fff8fa',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 15,
+  },
+
+  imageIcon: {
+    fontSize: 42,
+    color: '#d96b8a',
+    fontWeight: '300',
+    marginBottom: 8,
+  },
+
+  placeholderTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#d96b8a',
+  },
+
+  placeholderSubtitle: {
+    fontSize: 12,
+    color: '#999',
+    marginTop: 5,
+  },
+
+  imagePreviewContainer: {
+    width: '100%',
   },
 
   image: {
     width: '100%',
-    height: 220,
-    borderRadius: 10,
-    marginBottom: 10,
+    height: 240,
+    borderRadius: 12,
+    backgroundColor: '#f5f5f5',
   },
 
-  imageButton: {
+  imageActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 10,
+  },
+
+  changeImageButton: {
+    flex: 1,
     borderWidth: 1,
     borderColor: '#d96b8a',
-    borderRadius: 8,
+    borderRadius: 9,
     paddingVertical: 11,
     alignItems: 'center',
-    marginTop: 5,
   },
 
-  imageButtonText: {
+  changeImageText: {
     color: '#d96b8a',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+
+  removeImageButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 9,
+    paddingVertical: 11,
+    alignItems: 'center',
+  },
+
+  removeImageText: {
+    color: '#777',
+    fontSize: 13,
     fontWeight: '600',
   },
 
   updateButton: {
     backgroundColor: '#d96b8a',
-    borderRadius: 8,
-    paddingVertical: 13,
+    borderRadius: 10,
+    paddingVertical: 14,
     alignItems: 'center',
-    marginTop: 20,
+    marginTop: 25,
+  },
+
+  disabledButton: {
+    opacity: 0.65,
   },
 
   updateButtonText: {
     color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+
+  loadingContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 9,
+  },
+
+  cancelButton: {
+    paddingVertical: 13,
+    alignItems: 'center',
+    marginTop: 5,
+  },
+
+  cancelButtonText: {
+    color: '#888',
+    fontSize: 13,
     fontWeight: '600',
   },
 });

@@ -1,19 +1,24 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
+
 import {
   ActivityIndicator,
+  RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
-  ScrollView,
+  useWindowDimensions,
 } from 'react-native';
 
 import { Ionicons } from '@expo/vector-icons';
+
 import {
   useFocusEffect,
   useNavigation,
   NavigationProp,
 } from '@react-navigation/native';
+
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 
 import type {
@@ -53,20 +58,58 @@ const initialStats: DashboardStats = {
   readyForPickup: 0,
 };
 
+const normalizeStatus = (status: string | null | undefined) =>
+  (status ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+
+const formatStatus = (status: string) =>
+  status
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, letter => letter.toUpperCase());
+
 export default function StaffDashboard({ navigation }: Props) {
   const rootNavigation =
     useNavigation<NavigationProp<RootStackParamList>>();
 
+  const { width } = useWindowDimensions();
+
+  const isSmallScreen = width < 380;
+  const isLargeScreen = width >= 700;
+
   const [stats, setStats] = useState<DashboardStats>(initialStats);
+
   const [recentOrders, setRecentOrders] = useState<RecentOrder[]>([]);
   const [recentPayments, setRecentPayments] = useState<RecentPayment[]>([]);
+
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const [errorMessage, setErrorMessage] = useState('');
   const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false);
 
-  const loadDashboard = useCallback(async () => {
-    try {
-      setLoading(true);
+  const hasLoadedRef = useRef(false);
+  const isFocusedRef = useRef(false);
+  const requestInProgressRef = useRef(false);
 
+  // LOAD DASHBOARD DATA
+  const loadDashboard = useCallback(async () => {
+    if (requestInProgressRef.current) return;
+
+    requestInProgressRef.current = true;
+
+    const showInitialLoading = !hasLoadedRef.current;
+
+    if (showInitialLoading) {
+      setLoading(true);
+    } else {
+      setRefreshing(true);
+    }
+
+    setErrorMessage('');
+
+    try {
       const {
         data: { user },
         error: userError,
@@ -74,7 +117,12 @@ export default function StaffDashboard({ navigation }: Props) {
 
       if (userError) throw userError;
 
+      if (!isFocusedRef.current) return;
+
       if (!user) {
+        setStats(initialStats);
+        setRecentOrders([]);
+        setRecentPayments([]);
         setHasUnreadNotifications(false);
         return;
       }
@@ -87,9 +135,13 @@ export default function StaffDashboard({ navigation }: Props) {
         paymentsResult,
         unreadNotificationsResult,
       ] = await Promise.all([
-        supabase.from('orders').select('status'),
+        supabase
+          .from('orders')
+          .select('status'),
 
-        supabase.from('custom_orders').select('status'),
+        supabase
+          .from('custom_orders')
+          .select('status'),
 
         supabase
           .from('orders')
@@ -121,34 +173,40 @@ export default function StaffDashboard({ navigation }: Props) {
       if (catalogRecentResult.error) throw catalogRecentResult.error;
       if (customRecentResult.error) throw customRecentResult.error;
       if (paymentsResult.error) throw paymentsResult.error;
+
       if (unreadNotificationsResult.error) {
         throw unreadNotificationsResult.error;
       }
+
+      if (!isFocusedRef.current) return;
 
       setHasUnreadNotifications(
         (unreadNotificationsResult.count ?? 0) > 0
       );
 
+      // COMBINE CATALOG AND CUSTOM ORDER STATUSES
       const catalogOrders = catalogResult.data ?? [];
       const customOrders = customResult.data ?? [];
 
       const allStatuses = [
-        ...catalogOrders.map(order =>
-          (order.status ?? '').toLowerCase().replace(/ /g, '_')
-        ),
-        ...customOrders.map(order =>
-          (order.status ?? '').toLowerCase().replace(/ /g, '_')
-        ),
+        ...catalogOrders.map(order => normalizeStatus(order.status)),
+        ...customOrders.map(order => normalizeStatus(order.status)),
       ];
 
+      // ORDERS WAITING FOR STAFF ACTION
       const pendingStatuses = [
         'pending',
         'submitted',
         'under_review',
         'quoted',
         'quotation_sent',
+        'accepted',
+        'measurements_pending',
+        'awaiting_deposit',
+        'deposit_paid',
       ];
 
+      // ORDERS CURRENTLY IN THE PRODUCTION WORKFLOW
       const productionStatuses = [
         'assigned',
         'in_production',
@@ -158,6 +216,7 @@ export default function StaffDashboard({ navigation }: Props) {
         'finishing',
       ];
 
+      // ORDERS READY FOR CUSTOMER PICKUP OR RELEASE
       const readyStatuses = [
         'ready_for_release',
         'ready_for_pickup',
@@ -165,17 +224,21 @@ export default function StaffDashboard({ navigation }: Props) {
 
       setStats({
         totalOrders: allStatuses.length,
+
         pendingOrders: allStatuses.filter(status =>
           pendingStatuses.includes(status)
         ).length,
+
         inProduction: allStatuses.filter(status =>
           productionStatuses.includes(status)
         ).length,
+
         readyForPickup: allStatuses.filter(status =>
           readyStatuses.includes(status)
         ).length,
       });
 
+      // RECENT CATALOG ORDERS
       const catalogRecent: RecentOrder[] = (
         catalogRecentResult.data ?? []
       ).map(order => ({
@@ -185,6 +248,7 @@ export default function StaffDashboard({ navigation }: Props) {
         orderType: 'Catalog',
       }));
 
+      // RECENT CUSTOM ORDERS
       const customRecent: RecentOrder[] = (
         customRecentResult.data ?? []
       ).map(order => ({
@@ -194,7 +258,11 @@ export default function StaffDashboard({ navigation }: Props) {
         orderType: 'Custom',
       }));
 
-      const combinedOrders = [...catalogRecent, ...customRecent]
+      // COMBINE AND SORT RECENT ORDERS
+      const combinedOrders = [
+        ...catalogRecent,
+        ...customRecent,
+      ]
         .sort(
           (a, b) =>
             new Date(b.created_at).getTime() -
@@ -204,19 +272,42 @@ export default function StaffDashboard({ navigation }: Props) {
 
       setRecentOrders(combinedOrders);
       setRecentPayments(paymentsResult.data ?? []);
+
     } catch (error) {
       console.error('Error loading dashboard:', error);
+
+      if (isFocusedRef.current) {
+        setErrorMessage(
+          error instanceof Error
+            ? error.message
+            : 'Unable to load dashboard information. Please try again.'
+        );
+      }
     } finally {
-      setLoading(false);
+      requestInProgressRef.current = false;
+
+      if (isFocusedRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+        hasLoadedRef.current = true;
+      }
     }
   }, []);
 
+  // RELOAD WHEN DASHBOARD RECEIVES FOCUS
   useFocusEffect(
     useCallback(() => {
+      isFocusedRef.current = true;
+
       void loadDashboard();
+
+      return () => {
+        isFocusedRef.current = false;
+      };
     }, [loadDashboard])
   );
 
+  // NAVIGATION
   const handleNotifications = () => {
     rootNavigation.navigate('Notifications');
   };
@@ -237,10 +328,17 @@ export default function StaffDashboard({ navigation }: Props) {
     navigation.navigate('Payments');
   };
 
+  // FORMATTING
   const formatDate = (date: string) => {
     if (!date) return 'Date unavailable';
 
-    return new Date(date).toLocaleString('en-PH', {
+    const parsedDate = new Date(date);
+
+    if (Number.isNaN(parsedDate.getTime())) {
+      return 'Date unavailable';
+    }
+
+    return parsedDate.toLocaleString('en-PH', {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
@@ -249,21 +347,61 @@ export default function StaffDashboard({ navigation }: Props) {
     });
   };
 
-  const formatStatus = (status: string) => {
-    return status
-      .replace(/_/g, ' ')
-      .replace(/\b\w/g, letter => letter.toUpperCase());
-  };
-
   const shortId = (id: string) => {
     return id.slice(0, 8).toUpperCase();
+  };
+
+  // PAYMENT STATUS COLORS
+  const getPaymentStatusStyle = (status: string | null) => {
+    const normalized = normalizeStatus(status);
+
+    if (normalized === 'paid' || normalized === 'succeeded') {
+      return {
+        container: styles.paidStatus,
+        text: styles.paidText,
+      };
+    }
+
+    if (
+      normalized === 'failed' ||
+      normalized === 'cancelled' ||
+      normalized === 'canceled'
+    ) {
+      return {
+        container: styles.failedStatus,
+        text: styles.failedText,
+      };
+    }
+
+    if (normalized === 'refunded') {
+      return {
+        container: styles.refundedStatus,
+        text: styles.refundedText,
+      };
+    }
+
+    return {
+      container: styles.pendingStatus,
+      text: styles.pendingText,
+    };
   };
 
   return (
     <ScrollView
       style={styles.container}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[
+        styles.content,
+        isLargeScreen && styles.contentWide,
+      ]}
       showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => void loadDashboard()}
+          tintColor="#D96B8A"
+          colors={['#D96B8A']}
+        />
+      }
     >
       {/* HEADER */}
       <View style={styles.header}>
@@ -279,11 +417,12 @@ export default function StaffDashboard({ navigation }: Props) {
           style={styles.notificationButton}
           onPress={handleNotifications}
           activeOpacity={0.8}
+          accessibilityLabel="Open notifications"
         >
           <Ionicons
             name="notifications-outline"
             size={23}
-            color="#d96b8a"
+            color="#D96B8A"
           />
 
           {hasUnreadNotifications && (
@@ -292,9 +431,11 @@ export default function StaffDashboard({ navigation }: Props) {
         </TouchableOpacity>
       </View>
 
-      {/* WELCOME TEXT */}
+      {/* WELCOME */}
       <View style={styles.welcomeSection}>
-        <Text style={styles.welcomeTitle}>Welcome Back!</Text>
+        <Text style={styles.welcomeTitle}>
+          Welcome Back!
+        </Text>
 
         <Text style={styles.welcomeDescription}>
           Here's an overview of your orders, payments, and production
@@ -304,20 +445,64 @@ export default function StaffDashboard({ navigation }: Props) {
 
       {/* ORDER OVERVIEW */}
       <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>Order Overview</Text>
+        <Text style={styles.sectionTitle}>
+          Order Overview
+        </Text>
 
-        <TouchableOpacity onPress={loadDashboard}>
+        <TouchableOpacity
+          onPress={() => void loadDashboard()}
+          disabled={loading || refreshing}
+          activeOpacity={0.7}
+          style={styles.refreshButton}
+        >
           <Ionicons
             name="refresh-outline"
             size={20}
-            color="#d96b8a"
+            color="#D96B8A"
           />
         </TouchableOpacity>
       </View>
 
+      {/* ERROR MESSAGE */}
+      {!!errorMessage && !loading && (
+        <View style={styles.errorCard}>
+          <View style={styles.errorContent}>
+            <Ionicons
+              name="alert-circle-outline"
+              size={22}
+              color="#C94C4C"
+            />
+
+            <View style={styles.errorTextContainer}>
+              <Text style={styles.errorTitle}>
+                Unable to Load Dashboard
+              </Text>
+
+              <Text style={styles.errorText}>
+                {errorMessage}
+              </Text>
+            </View>
+          </View>
+
+          <TouchableOpacity
+            style={styles.retryButton}
+            onPress={() => void loadDashboard()}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.retryText}>
+              Try Again
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* STATISTICS */}
       {loading ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="small" color="#d96b8a" />
+          <ActivityIndicator
+            size="small"
+            color="#D96B8A"
+          />
 
           <Text style={styles.loadingText}>
             Loading dashboard...
@@ -325,42 +510,104 @@ export default function StaffDashboard({ navigation }: Props) {
         </View>
       ) : (
         <View style={styles.statsContainer}>
-          <View style={styles.statCard}>
+          <View
+            style={[
+              styles.statCard,
+              isLargeScreen && styles.statCardWide,
+            ]}
+          >
+            <View style={styles.statIcon}>
+              <Ionicons
+                name="receipt-outline"
+                size={20}
+                color="#D96B8A"
+              />
+            </View>
+
             <Text style={styles.statNumber}>
               {stats.totalOrders}
             </Text>
 
-            <Text style={styles.statLabel}>Total Orders</Text>
+            <Text style={styles.statLabel}>
+              Total Orders
+            </Text>
           </View>
 
-          <View style={styles.statCard}>
+          <View
+            style={[
+              styles.statCard,
+              isLargeScreen && styles.statCardWide,
+            ]}
+          >
+            <View style={styles.statIcon}>
+              <Ionicons
+                name="time-outline"
+                size={20}
+                color="#D99A3D"
+              />
+            </View>
+
             <Text style={styles.statNumber}>
               {stats.pendingOrders}
             </Text>
 
-            <Text style={styles.statLabel}>Pending Orders</Text>
+            <Text style={styles.statLabel}>
+              Pending Orders
+            </Text>
           </View>
 
-          <View style={styles.statCard}>
+          <View
+            style={[
+              styles.statCard,
+              isLargeScreen && styles.statCardWide,
+            ]}
+          >
+            <View style={styles.statIcon}>
+              <Ionicons
+                name="cut-outline"
+                size={20}
+                color="#6486C7"
+              />
+            </View>
+
             <Text style={styles.statNumber}>
               {stats.inProduction}
             </Text>
 
-            <Text style={styles.statLabel}>In Production</Text>
+            <Text style={styles.statLabel}>
+              In Production
+            </Text>
           </View>
 
-          <View style={styles.statCard}>
+          <View
+            style={[
+              styles.statCard,
+              isLargeScreen && styles.statCardWide,
+            ]}
+          >
+            <View style={styles.statIcon}>
+              <Ionicons
+                name="checkmark-circle-outline"
+                size={20}
+                color="#28A745"
+              />
+            </View>
+
             <Text style={styles.statNumber}>
               {stats.readyForPickup}
             </Text>
 
-            <Text style={styles.statLabel}>Ready for Pickup</Text>
+            <Text style={styles.statLabel}>
+              Ready for Pickup
+            </Text>
           </View>
         </View>
       )}
 
       {/* QUICK ACCESS */}
-      <Text style={styles.sectionTitle}>Quick Access</Text>
+      <Text style={styles.sectionTitle}>
+        Quick Access
+      </Text>
 
       <TouchableOpacity
         style={styles.quickAccessButton}
@@ -368,17 +615,28 @@ export default function StaffDashboard({ navigation }: Props) {
         activeOpacity={0.8}
       >
         <View style={styles.buttonIconContainer}>
-          <Ionicons name="bar-chart-outline" size={22} color="#d96b8a" />
+          <Ionicons
+            name="bar-chart-outline"
+            size={22}
+            color="#D96B8A"
+          />
         </View>
 
         <View style={styles.buttonTextContainer}>
-          <Text style={styles.buttonTitle}>Reports Management</Text>
+          <Text style={styles.buttonTitle}>
+            Reports Management
+          </Text>
+
           <Text style={styles.buttonDescription}>
             View production, payment, and material reports
           </Text>
         </View>
 
-        <Ionicons name="chevron-forward" size={20} color="#d96b8a" />
+        <Ionicons
+          name="chevron-forward"
+          size={20}
+          color="#D96B8A"
+        />
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -387,17 +645,28 @@ export default function StaffDashboard({ navigation }: Props) {
         activeOpacity={0.8}
       >
         <View style={styles.buttonIconContainer}>
-          <Ionicons name="wallet-outline" size={22} color="#d96b8a" />
+          <Ionicons
+            name="wallet-outline"
+            size={22}
+            color="#D96B8A"
+          />
         </View>
 
         <View style={styles.buttonTextContainer}>
-          <Text style={styles.buttonTitle}>Manage Payments</Text>
+          <Text style={styles.buttonTitle}>
+            Manage Payments
+          </Text>
+
           <Text style={styles.buttonDescription}>
             Review customer deposits, balances, and payments
           </Text>
         </View>
 
-        <Ionicons name="chevron-forward" size={20} color="#d96b8a" />
+        <Ionicons
+          name="chevron-forward"
+          size={20}
+          color="#D96B8A"
+        />
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -406,17 +675,28 @@ export default function StaffDashboard({ navigation }: Props) {
         activeOpacity={0.8}
       >
         <View style={styles.buttonIconContainer}>
-          <Ionicons name="shirt-outline" size={22} color="#d96b8a" />
+          <Ionicons
+            name="shirt-outline"
+            size={22}
+            color="#D96B8A"
+          />
         </View>
 
         <View style={styles.buttonTextContainer}>
-          <Text style={styles.buttonTitle}>Manage Garments</Text>
+          <Text style={styles.buttonTitle}>
+            Manage Garments
+          </Text>
+
           <Text style={styles.buttonDescription}>
             Manage garment categories, designs, and fabrics
           </Text>
         </View>
 
-        <Ionicons name="chevron-forward" size={20} color="#d96b8a" />
+        <Ionicons
+          name="chevron-forward"
+          size={20}
+          color="#D96B8A"
+        />
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -428,35 +708,57 @@ export default function StaffDashboard({ navigation }: Props) {
           <Ionicons
             name="document-text-outline"
             size={22}
-            color="#d96b8a"
+            color="#D96B8A"
           />
         </View>
 
         <View style={styles.buttonTextContainer}>
-          <Text style={styles.buttonTitle}>Manage Orders</Text>
+          <Text style={styles.buttonTitle}>
+            Manage Orders
+          </Text>
+
           <Text style={styles.buttonDescription}>
             Review catalog orders, custom requests, and assignments
           </Text>
         </View>
 
-        <Ionicons name="chevron-forward" size={20} color="#d96b8a" />
+        <Ionicons
+          name="chevron-forward"
+          size={20}
+          color="#D96B8A"
+        />
       </TouchableOpacity>
 
       {/* RECENT ORDERS */}
       <View style={styles.recentSection}>
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Recent Orders</Text>
+          <Text style={styles.sectionTitle}>
+            Recent Orders
+          </Text>
 
-          <TouchableOpacity onPress={handleManageOrders}>
-            <Text style={styles.viewAllText}>View All</Text>
+          <TouchableOpacity
+            onPress={handleManageOrders}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.viewAllText}>
+              View All
+            </Text>
           </TouchableOpacity>
         </View>
 
         {loading ? (
-          <ActivityIndicator color="#d96b8a" />
+          <ActivityIndicator color="#D96B8A" />
         ) : recentOrders.length === 0 ? (
           <View style={styles.emptyCard}>
-            <Text style={styles.emptyText}>No recent orders found.</Text>
+            <Ionicons
+              name="file-tray-outline"
+              size={27}
+              color="#C59BA9"
+            />
+
+            <Text style={styles.emptyText}>
+              No recent orders found.
+            </Text>
           </View>
         ) : (
           recentOrders.map(order => (
@@ -464,8 +766,23 @@ export default function StaffDashboard({ navigation }: Props) {
               key={`${order.orderType}-${order.id}`}
               style={styles.activityCard}
             >
+              <View style={styles.activityIcon}>
+                <Ionicons
+                  name={
+                    order.orderType === 'Catalog'
+                      ? 'shirt-outline'
+                      : 'create-outline'
+                  }
+                  size={19}
+                  color="#D96B8A"
+                />
+              </View>
+
               <View style={styles.activityDetails}>
-                <Text style={styles.activityTitle}>
+                <Text
+                  style={styles.activityTitle}
+                  numberOfLines={1}
+                >
                   {order.orderType} Order #{shortId(order.id)}
                 </Text>
 
@@ -474,7 +791,7 @@ export default function StaffDashboard({ navigation }: Props) {
                 </Text>
 
                 <Text style={styles.activitySubtitle}>
-                  {formatStatus(order.status)}
+                  {formatStatus(normalizeStatus(order.status))}
                 </Text>
               </View>
             </View>
@@ -485,57 +802,94 @@ export default function StaffDashboard({ navigation }: Props) {
       {/* RECENT PAYMENTS */}
       <View style={styles.recentSection}>
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Recent Payments</Text>
+          <Text style={styles.sectionTitle}>
+            Recent Payments
+          </Text>
 
-          <TouchableOpacity onPress={handlePayments}>
-            <Text style={styles.viewAllText}>View All</Text>
+          <TouchableOpacity
+            onPress={handlePayments}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.viewAllText}>
+              View All
+            </Text>
           </TouchableOpacity>
         </View>
 
         {loading ? (
-          <ActivityIndicator color="#d96b8a" />
+          <ActivityIndicator color="#D96B8A" />
         ) : recentPayments.length === 0 ? (
           <View style={styles.emptyCard}>
-            <Text style={styles.emptyText}>No recent payments found.</Text>
+            <Ionicons
+              name="wallet-outline"
+              size={27}
+              color="#C59BA9"
+            />
+
+            <Text style={styles.emptyText}>
+              No recent payments found.
+            </Text>
           </View>
         ) : (
-          recentPayments.map(payment => (
-            <View key={payment.id} style={styles.activityCard}>
-              <View style={styles.activityDetails}>
-                <Text style={styles.activityTitle}>
-                  {formatStatus(payment.payment_type || 'Payment')}
-                </Text>
+          recentPayments.map(payment => {
+            const paymentStyle = getPaymentStatusStyle(
+              payment.status
+            );
 
-                <Text style={styles.activityDate}>
-                  {formatDate(payment.created_at)}
-                </Text>
-
-                <Text style={styles.activitySubtitle}>
-                  Payment #{shortId(payment.id)}
-                </Text>
-              </View>
-
+            return (
               <View
-                style={[
-                  styles.paymentStatus,
-                  payment.status?.toLowerCase() === 'paid'
-                    ? styles.paidStatus
-                    : styles.unpaidStatus,
-                ]}
+                key={payment.id}
+                style={styles.activityCard}
               >
-                <Text
+                <View style={styles.activityIcon}>
+                  <Ionicons
+                    name="card-outline"
+                    size={19}
+                    color="#D96B8A"
+                  />
+                </View>
+
+                <View style={styles.activityDetails}>
+                  <Text
+                    style={styles.activityTitle}
+                    numberOfLines={1}
+                  >
+                    {formatStatus(
+                      normalizeStatus(
+                        payment.payment_type || 'Payment'
+                      )
+                    )}
+                  </Text>
+
+                  <Text style={styles.activityDate}>
+                    {formatDate(payment.created_at)}
+                  </Text>
+
+                  <Text style={styles.activitySubtitle}>
+                    Payment #{shortId(payment.id)}
+                  </Text>
+                </View>
+
+                <View
                   style={[
-                    styles.paymentStatusText,
-                    payment.status?.toLowerCase() === 'paid'
-                      ? styles.paidText
-                      : styles.unpaidText,
+                    styles.paymentStatus,
+                    paymentStyle.container,
                   ]}
                 >
-                  {formatStatus(payment.status || 'Pending')}
-                </Text>
+                  <Text
+                    style={[
+                      styles.paymentStatusText,
+                      paymentStyle.text,
+                    ]}
+                  >
+                    {formatStatus(
+                      normalizeStatus(payment.status || 'Pending')
+                    )}
+                  </Text>
+                </View>
               </View>
-            </View>
-          ))
+            );
+          })
         )}
       </View>
 
@@ -547,16 +901,23 @@ export default function StaffDashboard({ navigation }: Props) {
   );
 }
 
+// STYLES
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#faf9f8',
+    backgroundColor: '#FAF9F8',
   },
 
   content: {
     padding: 18,
     paddingTop: 22,
-    paddingBottom: 30,
+    paddingBottom: 35,
+  },
+
+  contentWide: {
+    width: '100%',
+    maxWidth: 900,
+    alignSelf: 'center',
   },
 
   header: {
@@ -568,12 +929,13 @@ const styles = StyleSheet.create({
 
   headerText: {
     flex: 1,
+    minWidth: 0,
   },
 
   title: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#1e2a4a',
+    color: '#1E2A4A',
   },
 
   subtitle: {
@@ -583,10 +945,10 @@ const styles = StyleSheet.create({
   },
 
   notificationButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#fff',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFF',
     justifyContent: 'center',
     alignItems: 'center',
     marginLeft: 10,
@@ -597,10 +959,12 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 7,
     right: 8,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#e74c3c',
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: '#E74C3C',
+    borderWidth: 1,
+    borderColor: '#FFF',
   },
 
   welcomeSection: {
@@ -610,13 +974,13 @@ const styles = StyleSheet.create({
   welcomeTitle: {
     fontSize: 19,
     fontWeight: 'bold',
-    color: '#1e2a4a',
+    color: '#1E2A4A',
     marginBottom: 5,
   },
 
   welcomeDescription: {
     fontSize: 12,
-    lineHeight: 18,
+    lineHeight: 19,
     color: '#777',
   },
 
@@ -630,8 +994,13 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#1e2a4a',
+    color: '#1E2A4A',
     marginBottom: 11,
+  },
+
+  refreshButton: {
+    padding: 5,
+    marginTop: -8,
   },
 
   statsContainer: {
@@ -642,54 +1011,117 @@ const styles = StyleSheet.create({
   },
 
   statCard: {
-    width: '48%',
-    backgroundColor: '#fff',
+    width: '48.5%',
+    backgroundColor: '#FFF',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 13,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#F2E8EC',
+  },
+
+  statCardWide: {
+    width: '23.5%',
+  },
+
+  statIcon: {
+    width: 34,
+    height: 34,
     borderRadius: 10,
-    paddingVertical: 11,
-    paddingHorizontal: 12,
+    backgroundColor: '#FCEAF0',
+    alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 8,
   },
 
   statNumber: {
-    fontSize: 21,
+    fontSize: 23,
     fontWeight: 'bold',
-    color: '#d96b8a',
+    color: '#D96B8A',
   },
 
   statLabel: {
-    fontSize: 10,
+    fontSize: 11,
     color: '#777',
-    marginTop: 3,
+    marginTop: 4,
   },
 
   loadingContainer: {
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 17,
+    backgroundColor: '#FFF',
+    borderRadius: 12,
+    padding: 20,
     alignItems: 'center',
     marginBottom: 18,
   },
 
   loadingText: {
-    fontSize: 11,
+    fontSize: 12,
     color: '#777',
-    marginTop: 7,
+    marginTop: 8,
+  },
+
+  errorCard: {
+    backgroundColor: '#FFF3F2',
+    borderWidth: 1,
+    borderColor: '#F2CECA',
+    borderRadius: 12,
+    padding: 13,
+    marginBottom: 15,
+  },
+
+  errorContent: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+
+  errorTextContainer: {
+    flex: 1,
+    marginLeft: 9,
+  },
+
+  errorTitle: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#A83D3D',
+  },
+
+  errorText: {
+    fontSize: 11,
+    lineHeight: 17,
+    color: '#995B5B',
+    marginTop: 3,
+  },
+
+  retryButton: {
+    alignSelf: 'flex-end',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginTop: 5,
+  },
+
+  retryText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#B84470',
   },
 
   quickAccessButton: {
-    backgroundColor: '#fff',
+    backgroundColor: '#FFF',
     borderRadius: 12,
-    padding: 12,
-    marginBottom: 9,
+    padding: 13,
+    marginBottom: 10,
     flexDirection: 'row',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#F2E8EC',
   },
 
   buttonIconContainer: {
-    width: 38,
-    height: 38,
+    width: 40,
+    height: 40,
     borderRadius: 10,
-    backgroundColor: '#fceaf0',
+    backgroundColor: '#FCEAF0',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 11,
@@ -697,49 +1129,63 @@ const styles = StyleSheet.create({
 
   buttonTextContainer: {
     flex: 1,
+    minWidth: 0,
   },
 
   buttonTitle: {
     fontSize: 13,
     fontWeight: 'bold',
-    color: '#1e2a4a',
+    color: '#1E2A4A',
   },
 
   buttonDescription: {
-    fontSize: 10,
+    fontSize: 11,
     color: '#777',
     marginTop: 4,
-    lineHeight: 15,
+    lineHeight: 16,
   },
 
   recentSection: {
-    marginTop: 15,
+    marginTop: 16,
   },
 
   viewAllText: {
     fontSize: 11,
-    color: '#d96b8a',
+    color: '#D96B8A',
     fontWeight: 'bold',
     marginBottom: 10,
   },
 
   activityCard: {
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 11,
-    marginBottom: 8,
+    backgroundColor: '#FFF',
+    borderRadius: 11,
+    padding: 12,
+    marginBottom: 9,
     flexDirection: 'row',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#F2E8EC',
+  },
+
+  activityIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#FCEAF0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
   },
 
   activityDetails: {
     flex: 1,
+    minWidth: 0,
   },
 
   activityTitle: {
     fontSize: 12,
     fontWeight: 'bold',
-    color: '#1e2a4a',
+    color: '#1E2A4A',
   },
 
   activityDate: {
@@ -750,55 +1196,77 @@ const styles = StyleSheet.create({
 
   activitySubtitle: {
     fontSize: 10,
-    color: '#d96b8a',
+    color: '#D96B8A',
     marginTop: 4,
   },
 
   paymentStatus: {
     paddingHorizontal: 8,
-    paddingVertical: 5,
+    paddingVertical: 6,
     borderRadius: 7,
-    marginLeft: 5,
-  },
-
-  paidStatus: {
-    backgroundColor: '#eaf6ee',
-  },
-
-  unpaidStatus: {
-    backgroundColor: '#fff3e4',
+    marginLeft: 7,
+    maxWidth: 105,
   },
 
   paymentStatusText: {
     fontSize: 9,
     fontWeight: 'bold',
+    textAlign: 'center',
+  },
+
+  paidStatus: {
+    backgroundColor: '#EAF6EE',
   },
 
   paidText: {
-    color: '#39875a',
+    color: '#39875A',
   },
 
-  unpaidText: {
-    color: '#b77b2e',
+  pendingStatus: {
+    backgroundColor: '#FFF3E4',
+  },
+
+  pendingText: {
+    color: '#B77B2E',
+  },
+
+  failedStatus: {
+    backgroundColor: '#FCEAEA',
+  },
+
+  failedText: {
+    color: '#C03939',
+  },
+
+  refundedStatus: {
+    backgroundColor: '#EAF0FA',
+  },
+
+  refundedText: {
+    color: '#5474A5',
   },
 
   emptyCard: {
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 17,
+    backgroundColor: '#FFF',
+    borderRadius: 11,
+    padding: 20,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#F2E8EC',
   },
 
   emptyText: {
     fontSize: 11,
     color: '#999',
+    marginTop: 7,
+    textAlign: 'center',
   },
 
   footer: {
     fontSize: 10,
     color: '#999',
     textAlign: 'center',
-    marginTop: 23,
-    lineHeight: 16,
+    marginTop: 25,
+    lineHeight: 17,
   },
 });
